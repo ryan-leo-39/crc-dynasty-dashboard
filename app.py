@@ -96,6 +96,23 @@ def get_season_scores(league_id, last_week):
             pass
     return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["week","roster_id","matchup_id","points"])
 
+@st.cache_data(ttl=600)
+def build_player_team_history(league_ids_tuple):
+    """str(pid) → frozenset of roster_ids the player has appeared on across all seasons."""
+    history: dict = {}
+    for lid in league_ids_tuple:
+        try:
+            for r in get_rosters(lid):
+                rid = r["roster_id"]
+                for pid in (r.get("players") or []):
+                    spid = str(pid)
+                    if spid not in history:
+                        history[spid] = set()
+                    history[spid].add(rid)
+        except Exception:
+            pass
+    return {k: frozenset(v) for k, v in history.items()}
+
 @st.cache_data(ttl=300)
 def get_all_transactions(league_id, last_week):
     txns = []
@@ -160,38 +177,39 @@ def roster_total_value(pids, players):
     return sum(dynasty_value(p, players) for p in pids)
 
 # ─── Immaculate Grid ──────────────────────────────────────────────────────────
+# Primary mechanic: each row and column is a fantasy team.
+# A cell requires a player who was rostered on BOTH the row team AND column team
+# at any point in league history.  Occasionally one column is a fun category
+# (e.g. "QB" → name a QB ever on that row team).
 
-POPULAR_NFL_TEAMS = [
-    "BUF","KC","PHI","SF","CIN","MIA","DAL","DET","GB","BAL",
-    "LAR","SEA","HOU","MIN","CLE","NYJ","PIT","NO","ATL","TB",
-    "DEN","LV","IND","CHI","CAR","ARI","NE","NYG","WAS","TEN","JAX","LAC",
+GRID_SPICE_CATS = [
+    {"type": "position", "name": "🏈 QB",    "value": "QB"},
+    {"type": "position", "name": "💨 RB",    "value": "RB"},
+    {"type": "position", "name": "⚡ WR",    "value": "WR"},
+    {"type": "position", "name": "🎯 TE",    "value": "TE"},
+    {"type": "age_max",  "name": "Age ≤ 25", "value": 25},
+    {"type": "age_min",  "name": "Age 29+",  "value": 29},
 ]
 
-def build_category_pool():
-    cats = []
-    for pos in ["QB","RB","WR","TE"]:
-        cats.append({"name": f"Pos: {pos}", "type": "position", "value": pos})
-    cats.append({"name": "Age ≤ 25",  "type": "age_max",   "value": 25})
-    cats.append({"name": "Age 26–28", "type": "age_range", "value": (26, 28)})
-    cats.append({"name": "Age 29+",   "type": "age_min",   "value": 29})
-    for nfl in POPULAR_NFL_TEAMS:
-        cats.append({"name": f"NFL: {nfl}", "type": "nfl_team", "value": nfl})
-    return cats
-
-def check_category(pid, cat, players):
+def _check_grid_item(pid, item, history, players):
+    """Return True if pid satisfies this grid item (team presence or category)."""
+    if item["type"] == "team":
+        return item["value"] in history.get(str(pid), frozenset())
     p   = players.get(str(pid), {})
-    typ, val = cat["type"], cat["value"]
-    if typ == "position":
-        return (p.get("fantasy_positions") or [p.get("position","")])[0] == val
-    if typ == "nfl_team":
-        return p.get("team") == val
+    pos = (p.get("fantasy_positions") or [p.get("position","")])[0]
     age = p.get("age")
-    if not age:
-        return False
-    if typ == "age_max":   return age <= val
-    if typ == "age_min":   return age >= val
-    if typ == "age_range": return val[0] <= age <= val[1]
+    if item["type"] == "position":  return pos == item["value"]
+    if not age:                      return False
+    if item["type"] == "age_max":   return age <= item["value"]
+    if item["type"] == "age_min":   return age >= item["value"]
+    if item["type"] == "age_range":
+        lo, hi = item["value"]; return lo <= age <= hi
     return False
+
+def _cell_answers(r_item, c_item, history, players):
+    return [pid for pid in history
+            if _check_grid_item(pid, r_item, history, players)
+            and _check_grid_item(pid, c_item, history, players)]
 
 def normalize_name(s):
     return s.lower().strip().replace(".", "").replace("'", "").replace("-", " ")
@@ -200,36 +218,46 @@ def find_player_by_name(guess, players):
     ng = normalize_name(guess)
     for pid, p in players.items():
         full = normalize_name(f"{p.get('first_name','')} {p.get('last_name','')}".strip())
-        last = normalize_name(p.get("last_name", ""))
+        last = normalize_name(p.get("last_name",""))
         if ng in (full, last):
             return pid
     return None
 
-def valid_answers(rid, cat, roster_map, players):
-    return [pid for pid in roster_map.get(rid, []) if check_category(pid, cat, players)]
+def _make_team_item(rid, teams_dict):
+    t = teams_dict[rid]
+    return {"type": "team", "name": t["team_name"], "mgr": t["display_name"], "value": rid}
 
-def generate_valid_grid(teams_dict, players, seed):
-    rng       = random.Random(seed)
-    roster_map = {rid: t["roster"].get("players") or [] for rid, t in teams_dict.items()}
-    cat_pool  = build_category_pool()
-    for _ in range(300):
-        sel_teams = rng.sample(list(teams_dict.items()), 3)
-        sel_cats  = rng.sample(cat_pool, 3)
+def generate_valid_grid(teams_dict, history, players, seed):
+    rng  = random.Random(seed)
+    tids = list(teams_dict.keys())
+
+    for _ in range(600):
+        # 85 % pure team-vs-team grid; 15 % one column swapped for a spice category
+        use_spice = rng.random() < 0.15 and len(tids) >= 5
+
+        if use_spice:
+            shuffled  = rng.sample(tids, 5)
+            row_items = [_make_team_item(r, teams_dict) for r in shuffled[:3]]
+            col_items = [_make_team_item(r, teams_dict) for r in shuffled[3:5]]
+            col_items.append(rng.choice(GRID_SPICE_CATS))
+        else:
+            shuffled  = rng.sample(tids, min(6, len(tids)))
+            row_items = [_make_team_item(r, teams_dict) for r in shuffled[:3]]
+            col_items = [_make_team_item(r, teams_dict) for r in shuffled[3:6]]
+
+        # Require every cell to have ≥ 2 distinct valid answers
         if all(
-            valid_answers(rid, cat, roster_map, players)
-            for rid, _ in sel_teams
-            for cat in sel_cats
+            len(_cell_answers(r, c, history, players)) >= 2
+            for r in row_items for c in col_items
         ):
-            return sel_teams, sel_cats
-    return list(teams_dict.items())[:3], [
-        {"name": "Pos: QB", "type": "position", "value": "QB"},
-        {"name": "Pos: WR", "type": "position", "value": "WR"},
-        {"name": "Pos: RB", "type": "position", "value": "RB"},
-    ]
+            return row_items, col_items
+
+    # Fallback (should rarely trigger)
+    return ([_make_team_item(tids[i], teams_dict) for i in range(3)],
+            [_make_team_item(tids[i], teams_dict) for i in range(3, min(6,len(tids)))])
 
 def daily_seed():
-    d = date.today().isoformat()
-    return int(hashlib.md5(d.encode()).hexdigest(), 16) % (2 ** 31)
+    return int(hashlib.md5(date.today().isoformat().encode()).hexdigest(), 16) % (2**31)
 
 # ─── Page: Home ───────────────────────────────────────────────────────────────
 
@@ -877,129 +905,189 @@ def page_trade_analyzer(seasons, players):
 
 # ─── Page: Immaculate Grid ────────────────────────────────────────────────────
 
+def _header_html(item, corner=False):
+    if corner:
+        return '<div style="height:64px"></div>'
+    if item["type"] == "team":
+        return (f'<div style="background:#313244;border-radius:10px;padding:10px 8px;'
+                f'text-align:center;font-weight:700;color:#cdd6f4;font-size:.9rem;min-height:64px;'
+                f'display:flex;flex-direction:column;justify-content:center">'
+                f'{item["name"]}<br>'
+                f'<span style="font-size:.72rem;font-weight:400;color:#6c7086">{item["mgr"]}</span>'
+                f'</div>')
+    return (f'<div style="background:#45475a;border-radius:10px;padding:10px 8px;'
+            f'text-align:center;font-weight:700;color:#f9e2af;font-size:.9rem;min-height:64px;'
+            f'display:flex;flex-direction:column;justify-content:center">'
+            f'{item["name"]}</div>')
+
 def page_immaculate_grid(seasons, players):
     st.title("🎮 Immaculate Grid")
     today = date.today()
-    st.caption(f"Daily puzzle — {today.strftime('%B %d, %Y')}  |  New grid every day at midnight")
+    st.caption(
+        f"Daily puzzle — {today.strftime('%B %d, %Y')}  |  New grid at midnight  |  "
+        f"Name a player rostered on **both** teams (rows × columns) at any point in league history"
+    )
 
-    # Load current rosters (most recent season)
+    # Build team map from the most recent season that has rosters
     current_lid = seasons[0]["league_id"]
     teams = build_team_map(get_users(current_lid), get_rosters(current_lid))
 
-    # Generate today's grid (deterministic from date)
+    # Build cross-season player history
+    with st.spinner("Building league history…"):
+        history = build_player_team_history(
+            tuple(lg["league_id"] for lg in seasons)
+        )
+
     seed = daily_seed()
     with st.spinner("Generating today's grid…"):
-        sel_teams, sel_cats = generate_valid_grid(teams, players, seed)
+        row_items, col_items = generate_valid_grid(teams, history, players, seed)
 
-    # Session state init (reset if date changed)
+    # Session state — reset each new day
     if st.session_state.get("ig_date") != str(today):
         st.session_state.ig_date      = str(today)
         st.session_state.ig_submitted = False
         st.session_state.ig_results   = {}
         st.session_state.ig_score     = 0
+        st.session_state.ig_used      = set()   # prevent reusing same player
 
     submitted = st.session_state.ig_submitted
-    results   = st.session_state.ig_results
 
-    # ── Grid UI ──────────────────────────────────────────────────────────────
-    roster_map = {rid: set(t["roster"].get("players") or []) for rid, t in teams.items()}
+    # ── Grid render helper ────────────────────────────────────────────────────
+    def render_grid_shell(with_inputs):
+        """Render header row + 3 data rows. with_inputs=True → text fields."""
+        prop = [1.6, 1, 1, 1]
+        # Header row
+        hdr = st.columns(prop)
+        hdr[0].markdown(_header_html(None, corner=True), unsafe_allow_html=True)
+        for j, c_item in enumerate(col_items):
+            hdr[j+1].markdown(_header_html(c_item), unsafe_allow_html=True)
+        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+        # Data rows
+        if with_inputs:
+            inputs = {}
+            for i, r_item in enumerate(row_items):
+                row = st.columns(prop)
+                row[0].markdown(_header_html(r_item), unsafe_allow_html=True)
+                for j in range(3):
+                    inputs[(i,j)] = row[j+1].text_input(
+                        "p", label_visibility="collapsed",
+                        placeholder="Type name…",
+                        key=f"ig_g_{i}_{j}",
+                    )
+                st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+            return inputs
+        else:
+            results = st.session_state.ig_results
+            for i, r_item in enumerate(row_items):
+                row = st.columns(prop)
+                row[0].markdown(_header_html(r_item), unsafe_allow_html=True)
+                for j in range(3):
+                    res = results.get((i,j), {})
+                    ok  = res.get("correct", False)
+                    txt = res.get("player") or res.get("guess") or "—"
+                    bg  = "#a6e3a115" if ok else "#f38ba815"
+                    bdr = "#a6e3a1"   if ok else "#f38ba8"
+                    ico = "✅" if ok else "❌"
+                    row[j+1].markdown(
+                        f'<div style="background:{bg};border:2px solid {bdr};border-radius:10px;'
+                        f'padding:12px 6px;text-align:center;min-height:64px;'
+                        f'display:flex;flex-direction:column;justify-content:center">'
+                        f'{ico}<br><span style="font-size:.82rem;color:#cdd6f4">{txt}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+                st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
-    # Header row
-    hcols = st.columns([2,1,1,1])
-    hcols[0].markdown("")
-    for j, cat in enumerate(sel_cats):
-        hcols[j+1].markdown(f'<div class="ig-cat">{cat["name"]}</div>', unsafe_allow_html=True)
-
-    st.markdown("")
-
+    # ── Input phase ───────────────────────────────────────────────────────────
     if not submitted:
         with st.form("ig_form"):
-            guesses = {}
-            for i, (rid, team) in enumerate(sel_teams):
-                row_cols = st.columns([2,1,1,1])
-                with row_cols[0]:
-                    st.markdown(f'<div class="ig-team">{team["team_name"]}<br>'
-                                f'<span style="font-size:.75rem;color:#6c7086">{team["display_name"]}</span></div>',
-                                unsafe_allow_html=True)
-                for j, cat in enumerate(sel_cats):
-                    with row_cols[j+1]:
-                        guesses[(i,j)] = st.text_input(
-                            "player", label_visibility="collapsed",
-                            placeholder="Player name…",
-                            key=f"ig_guess_{i}_{j}",
-                        )
-                st.markdown("")
+            inputs = render_grid_shell(with_inputs=True)
+            go = st.form_submit_button("Submit Answers ✓", use_container_width=True)
 
-            submitted_btn = st.form_submit_button("Check Answers 🏈", use_container_width=True)
-
-        if submitted_btn:
-            score = 0
+        if go:
+            used_pids: set = set()
             res   = {}
-            for i, (rid, team) in enumerate(sel_teams):
-                for j, cat in enumerate(sel_cats):
-                    guess = guesses.get((i,j),"").strip()
+            score = 0
+            for i, r_item in enumerate(row_items):
+                for j, c_item in enumerate(col_items):
+                    guess = (inputs.get((i,j)) or "").strip()
                     if not guess:
-                        res[(i,j)] = {"correct":False,"guess":"","player":None}
+                        res[(i,j)] = {"correct": False, "guess": ""}
                         continue
                     pid = find_player_by_name(guess, players)
-                    if pid and str(pid) in roster_map.get(rid,set()) and check_category(pid, cat, players):
-                        name,_,_,_ = player_info(pid, players)
-                        res[(i,j)] = {"correct":True,"guess":guess,"player":name}
+                    valid = (
+                        pid is not None
+                        and pid not in used_pids
+                        and _check_grid_item(pid, r_item, history, players)
+                        and _check_grid_item(pid, c_item, history, players)
+                    )
+                    if valid:
+                        name = player_info(pid, players)[0]
+                        res[(i,j)] = {"correct": True, "guess": guess, "player": name}
+                        used_pids.add(pid)
                         score += 1
                     else:
-                        res[(i,j)] = {"correct":False,"guess":guess,"player":None}
+                        reason = ""
+                        if pid is None:
+                            reason = "player not found"
+                        elif pid in used_pids:
+                            reason = "already used"
+                        res[(i,j)] = {"correct": False, "guess": guess, "reason": reason}
             st.session_state.ig_submitted = True
             st.session_state.ig_results   = res
             st.session_state.ig_score     = score
             st.rerun()
 
+    # ── Results phase ─────────────────────────────────────────────────────────
     else:
-        # Show results
         score = st.session_state.ig_score
+        emoji = "🏆" if score==9 else "🔥" if score>=7 else "👍" if score>=5 else "😬"
         color = "#a6e3a1" if score>=7 else "#f9e2af" if score>=4 else "#f38ba8"
-        st.markdown(f"""<div style="text-align:center;margin:12px 0;font-size:1.8rem;
-        font-weight:800;color:{color}">Score: {score}/9</div>""", unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="text-align:center;font-size:2rem;font-weight:800;'
+            f'color:{color};margin:8px 0 16px">{emoji} {score} / 9</div>',
+            unsafe_allow_html=True,
+        )
+        render_grid_shell(with_inputs=False)
 
-        for i, (rid, team) in enumerate(sel_teams):
-            row_cols = st.columns([2,1,1,1])
-            with row_cols[0]:
-                st.markdown(f'<div class="ig-team">{team["team_name"]}</div>',
-                            unsafe_allow_html=True)
-            for j, cat in enumerate(sel_cats):
-                res = results.get((i,j),{})
-                correct = res.get("correct",False)
-                player  = res.get("player") or res.get("guess","—")
-                css     = "ig-correct" if correct else "ig-wrong"
-                icon    = "✅" if correct else "❌"
-                with row_cols[j+1]:
-                    st.markdown(f'<div class="ig-cell {css}">{icon}<br>'
-                                f'<span style="font-size:.8rem">{player}</span></div>',
-                                unsafe_allow_html=True)
-            st.markdown("")
+        col1, col2 = st.columns(2)
+        reveal = col1.button("👁️ Reveal All Answers", key="ig_reveal")
+        col2.button("🔄 Try Again", key="ig_retry",
+                    on_click=lambda: st.session_state.update(
+                        ig_submitted=False, ig_results={}, ig_score=0))
 
-        # Reveal answers button
-        if st.button("👁️ Reveal Valid Answers"):
-            for i, (rid, team) in enumerate(sel_teams):
-                st.markdown(f"**{team['team_name']}**")
-                for j, cat in enumerate(sel_cats):
-                    answers = valid_answers(rid, cat, roster_map, players)
-                    names   = [player_info(pid, players)[0] for pid in answers]
-                    st.markdown(f"— *{cat['name']}*: {', '.join(names) or 'None'}")
+        if reveal:
+            st.markdown("---")
+            st.markdown("**Valid answers for each cell:**")
+            prop = [1.6, 1, 1, 1]
+            hdr = st.columns(prop)
+            hdr[0].write("")
+            for j, c_item in enumerate(col_items):
+                hdr[j+1].markdown(f"**{c_item['name']}**")
+            for i, r_item in enumerate(row_items):
+                row = st.columns(prop)
+                row[0].markdown(f"**{r_item['name']}**")
+                for j, c_item in enumerate(col_items):
+                    answers = _cell_answers(r_item, c_item, history, players)
+                    names   = sorted(player_info(p, players)[0] for p in answers)
+                    row[j+1].markdown(
+                        f'<div style="font-size:.78rem;color:#a6adc8">{", ".join(names[:8])}'
+                        f'{"…" if len(names)>8 else ""}</div>',
+                        unsafe_allow_html=True,
+                    )
 
-        if st.button("🔄 Play Again"):
-            st.session_state.ig_submitted = False
-            st.session_state.ig_results   = {}
-            st.session_state.ig_score     = 0
-            st.rerun()
-
-    # Rules
+    # ── Rules ─────────────────────────────────────────────────────────────────
     with st.expander("How to play"):
         st.markdown("""
-        - Each **row** is a fantasy team's current roster
-        - Each **column** is a player attribute
-        - Enter a player who is **on that team AND matches the column**
-        - Type the player's full name (or last name if unique)
-        - The grid is the same for everyone and resets each day at midnight
+**Rows** and **columns** are each a fantasy team from your league.
+
+For each cell, name a player who was **rostered on both** the row team and the column team
+at any point in league history (any season since 2023).
+
+- Type a player's full name or last name
+- Each player can only be used **once** across the whole grid
+- Occasionally a column will be a position or age category instead of a team —
+  then you just need a player on that row team who fits the category
+- The grid is identical for everyone and resets every day at midnight
         """)
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
