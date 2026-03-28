@@ -23,6 +23,7 @@ st.set_page_config(
 
 st.markdown("""
 <style>
+/* ── Base ──────────────────────────────────────────── */
 .metric-card{background:#1e1e2e;border-radius:12px;padding:16px 20px;
              border:1px solid #313244;text-align:center;margin-bottom:8px}
 .metric-card .label{color:#a6adc8;font-size:.8rem;text-transform:uppercase;letter-spacing:.05em}
@@ -32,18 +33,63 @@ st.markdown("""
               border:1px solid #f9e2af55;border-radius:12px;padding:16px 24px;margin-bottom:16px}
 .sec-hdr{font-size:1.1rem;font-weight:600;color:#cdd6f4;
          border-bottom:2px solid #313244;padding-bottom:6px;margin:20px 0 12px 0}
-.ig-cell{background:#1e1e2e;border:2px solid #313244;border-radius:10px;
-         padding:10px;text-align:center;min-height:80px}
-.ig-correct{border-color:#a6e3a1!important;background:#a6e3a115!important}
-.ig-wrong  {border-color:#f38ba8!important;background:#f38ba815!important}
-.ig-cat{background:#313244;border-radius:8px;padding:8px;font-size:.85rem;
-        font-weight:600;color:#cdd6f4;text-align:center}
-.ig-team{background:#181825;border-radius:8px;padding:10px;font-weight:600;
-         color:#cdd6f4;font-size:.9rem}
+.ig-row-hdr{background:#181825;border-radius:10px;padding:10px 14px;
+            font-weight:700;color:#cdd6f4;font-size:.95rem;margin:8px 0 4px 0;
+            border-left:3px solid #89b4fa}
+.ig-row-hdr span{font-size:.72rem;font-weight:400;color:#6c7086;margin-left:6px}
 .bracket-match{background:#1e1e2e;border:1px solid #313244;border-radius:10px;
                padding:12px 16px;margin:4px 0}
 .bracket-winner{color:#a6e3a1;font-weight:700}
 .bracket-loser {color:#f38ba888}
+
+/* ── Mobile ─────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Reduce outer padding */
+  .main .block-container{padding-left:0.75rem!important;padding-right:0.75rem!important}
+
+  /* Prevent iOS auto-zoom on input focus (must be 16px+) */
+  input, textarea, select{font-size:16px!important}
+
+  /* Taller touch targets for text inputs */
+  .stTextInput > div > div > input{min-height:44px!important;padding:0 10px!important}
+
+  /* Compact metric cards */
+  .metric-card{padding:10px 12px!important}
+  .metric-card .value{font-size:1.2rem!important}
+  .metric-card .label{font-size:.72rem!important}
+
+  /* Smaller headings */
+  h1{font-size:1.4rem!important}
+  h2,h3{font-size:1.1rem!important}
+  .sec-hdr{font-size:.95rem!important}
+
+  /* Tabs: horizontal scroll, smaller text */
+  .stTabs [data-baseweb="tab-list"]{overflow-x:auto;flex-wrap:nowrap;
+    -webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar{display:none}
+  .stTabs [data-baseweb="tab"]{font-size:.72rem!important;
+    padding:6px 8px!important;white-space:nowrap;min-width:0!important}
+
+  /* Champ banner compact */
+  .champ-banner{padding:10px 14px!important;font-size:.9rem}
+
+  /* Grid row header compact */
+  .ig-row-hdr{font-size:.85rem!important;padding:8px 10px!important}
+
+  /* Bracket cards compact */
+  .bracket-match{padding:8px 10px!important}
+
+  /* Buttons full width */
+  .stButton > button{width:100%!important}
+
+  /* Form submit button */
+  .stFormSubmitButton > button{width:100%!important;min-height:48px!important;
+    font-size:1rem!important}
+
+  /* Selectbox and slider larger touch */
+  .stSelectbox > div > div{min-height:44px!important}
+  .stSlider{padding:0!important}
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -281,14 +327,14 @@ def page_home(seasons, players):
             <span style="color:#a6adc8"> — {champ['display_name']}</span>
             </div>""", unsafe_allow_html=True)
 
-    c1, c2, c3, c4 = st.columns(4)
+    r1c1, r1c2 = st.columns(2)
+    r2c1, r2c2 = st.columns(2)
+    starters = len([p for p in current.get("roster_positions",[]) if p not in ("BN","IR","TAXI")])
     for col, label, val, sub in [
-        (c1, "Current Season",  current["season"],           current["status"].replace("_"," ").title()),
-        (c2, "Seasons",         len(seasons),                f"Since {seasons[-1]['season']}"),
-        (c3, "Teams",           current["total_rosters"],    "Dynasty PPR"),
-        (c4, "Starters",
-             len([p for p in current.get("roster_positions",[]) if p not in ("BN","IR","TAXI")]),
-             f"{len(current.get('roster_positions',[]))} total spots"),
+        (r1c1, "Current Season", current["season"],        current["status"].replace("_"," ").title()),
+        (r1c2, "Seasons",        len(seasons),             f"Since {seasons[-1]['season']}"),
+        (r2c1, "Teams",          current["total_rosters"], "Dynasty PPR"),
+        (r2c2, "Starters",       starters,                 f"{len(current.get('roster_positions',[]))} total spots"),
     ]:
         col.markdown(f"""<div class="metric-card">
         <div class="label">{label}</div><div class="value">{val}</div><div class="sub">{sub}</div>
@@ -438,12 +484,13 @@ def page_teams(seasons, players):
     s   = r["settings"]
     meta = r.get("metadata") or {}
 
-    c1,c2,c3,c4 = st.columns(4)
+    tr1c1, tr1c2 = st.columns(2)
+    tr2c1, tr2c2 = st.columns(2)
     for col, lbl, val in [
-        (c1, "Record",        f"{s.get('wins',0)}–{s.get('losses',0)}"),
-        (c2, "Points For",    round(fpts(s),1)),
-        (c3, "Points Agnst",  round(fpts(s,'fpts_against'),1)),
-        (c4, "Dynasty Value", round(roster_total_value(r.get("players") or [], players),0)),
+        (tr1c1, "Record",        f"{s.get('wins',0)}–{s.get('losses',0)}"),
+        (tr1c2, "Points For",    round(fpts(s),1)),
+        (tr2c1, "Points Agnst",  round(fpts(s,'fpts_against'),1)),
+        (tr2c2, "Dynasty Value", round(roster_total_value(r.get("players") or [], players),0)),
     ]:
         col.markdown(f"""<div class="metric-card">
         <div class="label">{lbl}</div><div class="value">{val}</div></div>""",
@@ -953,34 +1000,62 @@ def page_immaculate_grid(seasons, players):
     submitted = st.session_state.ig_submitted
 
     # ── Grid render helper ────────────────────────────────────────────────────
+    def col_header_html(item):
+        if item["type"] == "team":
+            return (f'<div style="background:#313244;border-radius:10px;padding:8px 6px;'
+                    f'text-align:center;font-weight:700;color:#cdd6f4;font-size:.82rem;'
+                    f'min-height:56px;display:flex;flex-direction:column;justify-content:center;'
+                    f'line-height:1.3">{item["name"]}<br>'
+                    f'<span style="font-size:.68rem;font-weight:400;color:#6c7086">'
+                    f'{item["mgr"]}</span></div>')
+        return (f'<div style="background:#45475a;border-radius:10px;padding:8px 6px;'
+                f'text-align:center;font-weight:700;color:#f9e2af;font-size:.85rem;'
+                f'min-height:56px;display:flex;flex-direction:column;justify-content:center">'
+                f'{item["name"]}</div>')
+
     def render_grid_shell(with_inputs):
-        """Render header row + 3 data rows. with_inputs=True → text fields."""
-        prop = [1.6, 1, 1, 1]
-        # Header row
-        hdr = st.columns(prop)
-        hdr[0].markdown(_header_html(None, corner=True), unsafe_allow_html=True)
+        """Mobile-friendly layout: column headers once at top, then each row is a
+        full-width banner + 3 equal-width cells beneath it."""
+        # ── Column header row ────────────────────────────────────────────────
+        hdr = st.columns([0.01, 1, 1, 1])   # tiny spacer + 3 equal col headers
+        hdr[0].markdown("", unsafe_allow_html=True)
         for j, c_item in enumerate(col_items):
-            hdr[j+1].markdown(_header_html(c_item), unsafe_allow_html=True)
-        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-        # Data rows
+            hdr[j+1].markdown(col_header_html(c_item), unsafe_allow_html=True)
+
+        # ── Three data rows ──────────────────────────────────────────────────
         if with_inputs:
             inputs = {}
             for i, r_item in enumerate(row_items):
-                row = st.columns(prop)
-                row[0].markdown(_header_html(r_item), unsafe_allow_html=True)
-                for j in range(3):
-                    inputs[(i,j)] = row[j+1].text_input(
-                        "p", label_visibility="collapsed",
-                        placeholder="Type name…",
-                        key=f"ig_g_{i}_{j}",
-                    )
-                st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+                # Full-width row header
+                st.markdown(
+                    f'<div class="ig-row-hdr">{r_item["name"]}'
+                    f'<span>({r_item["mgr"]})</span></div>',
+                    unsafe_allow_html=True,
+                )
+                cells = st.columns(3)
+                for j, c_item in enumerate(col_items):
+                    with cells[j]:
+                        # Tiny column-name reminder so each input is self-contained
+                        st.markdown(
+                            f'<div style="font-size:.65rem;color:#6c7086;text-align:center;'
+                            f'margin-bottom:2px;line-height:1.2">{c_item["name"]}</div>',
+                            unsafe_allow_html=True,
+                        )
+                        inputs[(i,j)] = st.text_input(
+                            "p", label_visibility="collapsed",
+                            placeholder="Name…",
+                            key=f"ig_g_{i}_{j}",
+                        )
             return inputs
         else:
             results = st.session_state.ig_results
             for i, r_item in enumerate(row_items):
-                row = st.columns(prop)
-                row[0].markdown(_header_html(r_item), unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="ig-row-hdr">{r_item["name"]}'
+                    f'<span>({r_item["mgr"]})</span></div>',
+                    unsafe_allow_html=True,
+                )
+                cells = st.columns(3)
                 for j in range(3):
                     res = results.get((i,j), {})
                     ok  = res.get("correct", False)
@@ -988,14 +1063,15 @@ def page_immaculate_grid(seasons, players):
                     bg  = "#a6e3a115" if ok else "#f38ba815"
                     bdr = "#a6e3a1"   if ok else "#f38ba8"
                     ico = "✅" if ok else "❌"
-                    row[j+1].markdown(
-                        f'<div style="background:{bg};border:2px solid {bdr};border-radius:10px;'
-                        f'padding:12px 6px;text-align:center;min-height:64px;'
-                        f'display:flex;flex-direction:column;justify-content:center">'
-                        f'{ico}<br><span style="font-size:.82rem;color:#cdd6f4">{txt}</span></div>',
+                    cells[j].markdown(
+                        f'<div style="background:{bg};border:2px solid {bdr};'
+                        f'border-radius:10px;padding:10px 4px;text-align:center;'
+                        f'min-height:64px;display:flex;flex-direction:column;'
+                        f'justify-content:center;line-height:1.3">'
+                        f'{ico}<br><span style="font-size:.78rem;color:#cdd6f4;'
+                        f'word-break:break-word">{txt}</span></div>',
                         unsafe_allow_html=True,
                     )
-                st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
     # ── Input phase ───────────────────────────────────────────────────────────
     if not submitted:
@@ -1099,8 +1175,8 @@ def main():
 
     tabs = st.tabs([
         "🏠 Home", "📊 Standings", "🏟️ Teams", "📅 Matchups",
-        "🏆 Playoffs", "💱 Transactions", "📜 Draft Grades",
-        "💰 Trade Analyzer", "🎮 Immaculate Grid",
+        "🏆 Playoffs", "💱 Trades", "📜 Drafts",
+        "💰 Values", "🎮 Grid",
     ])
     with tabs[0]: page_home(seasons, players)
     with tabs[1]: page_standings(seasons, players)
