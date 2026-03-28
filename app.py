@@ -63,12 +63,11 @@ st.markdown("""
   h2,h3{font-size:1.1rem!important}
   .sec-hdr{font-size:.95rem!important}
 
-  /* Tabs: horizontal scroll, smaller text */
-  .stTabs [data-baseweb="tab-list"]{overflow-x:auto;flex-wrap:nowrap;
+  /* Tabs: horizontal scroll, no text wrapping */
+  .stTabs [data-baseweb="tab-list"]{overflow-x:auto!important;flex-wrap:nowrap!important;
     -webkit-overflow-scrolling:touch;scrollbar-width:none}
   .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar{display:none}
-  .stTabs [data-baseweb="tab"]{font-size:.72rem!important;
-    padding:6px 8px!important;white-space:nowrap;min-width:0!important}
+  .stTabs [data-baseweb="tab"]{white-space:nowrap!important;padding:8px 10px!important}
 
   /* Champ banner compact */
   .champ-banner{padding:10px 14px!important;font-size:.9rem}
@@ -952,144 +951,130 @@ def page_trade_analyzer(seasons, players):
 
 # ─── Page: Immaculate Grid ────────────────────────────────────────────────────
 
-def _header_html(item, corner=False):
-    if corner:
-        return '<div style="height:64px"></div>'
-    if item["type"] == "team":
-        return (f'<div style="background:#313244;border-radius:10px;padding:10px 8px;'
-                f'text-align:center;font-weight:700;color:#cdd6f4;font-size:.9rem;min-height:64px;'
-                f'display:flex;flex-direction:column;justify-content:center">'
-                f'{item["name"]}<br>'
-                f'<span style="font-size:.72rem;font-weight:400;color:#6c7086">{item["mgr"]}</span>'
-                f'</div>')
-    return (f'<div style="background:#45475a;border-radius:10px;padding:10px 8px;'
-            f'text-align:center;font-weight:700;color:#f9e2af;font-size:.9rem;min-height:64px;'
-            f'display:flex;flex-direction:column;justify-content:center">'
-            f'{item["name"]}</div>')
+def _build_grid_html(row_items, col_items, current_answers, results, submitted):
+    """Return a self-contained HTML table representing the 4×4 grid."""
+    B = "border:2px solid #313244"
+    P = "padding:8px 6px;text-align:center;vertical-align:middle"
+    H = f"{B};{P};font-weight:700;font-size:.82rem;line-height:1.35;height:76px"
+
+    html = ('<table style="width:100%;border-collapse:collapse;'
+            'table-layout:fixed;margin-bottom:4px">')
+
+    # Column header row
+    html += '<tr>'
+    html += f'<td style="{H};background:#181825;font-size:1.4rem">🏈</td>'
+    for c in col_items:
+        if c["type"] == "team":
+            sub = (f'<br><span style="font-size:.65rem;font-weight:400;color:#6c7086">'
+                   f'{c["mgr"]}</span>')
+            html += f'<td style="{H};background:#313244;color:#cdd6f4">{c["name"]}{sub}</td>'
+        else:
+            html += f'<td style="{H};background:#45475a;color:#f9e2af">{c["name"]}</td>'
+    html += '</tr>'
+
+    # Data rows
+    for i, r in enumerate(row_items):
+        html += '<tr>'
+        sub = (f'<br><span style="font-size:.65rem;font-weight:400;color:#6c7086">'
+               f'{r["mgr"]}</span>')
+        html += f'<td style="{H};background:#313244;color:#cdd6f4">{r["name"]}{sub}</td>'
+        for j in range(3):
+            if submitted:
+                res = results.get((i, j), {})
+                ok  = res.get("correct", False)
+                txt = res.get("player") or res.get("guess") or "—"
+                ico = "✅" if ok else "❌"
+                bg  = "#a6e3a115" if ok else "#f38ba815"
+                bdr = "#a6e3a1"   if ok else "#f38ba8"
+                html += (f'<td style="background:{bg};border:2px solid {bdr};{P};height:76px;'
+                         f'font-size:.75rem;color:#cdd6f4;word-break:break-word;line-height:1.4">'
+                         f'{ico}<br>{txt}</td>')
+            else:
+                ans  = current_answers.get((i, j), "").strip()
+                disp = (ans[:13] + "…") if len(ans) > 13 else ans
+                if ans:
+                    html += (f'<td style="background:#313244;border:2px solid #89b4fa;{P};'
+                             f'height:76px;font-size:.75rem;color:#89b4fa;line-height:1.4">'
+                             f'✏️ {disp}</td>')
+                else:
+                    html += (f'<td style="background:#1e1e2e;border:2px solid #45475a;{P};'
+                             f'height:76px;font-size:1.6rem;color:#313244">?</td>')
+        html += '</tr>'
+
+    html += '</table>'
+    return html
 
 def page_immaculate_grid(seasons, players):
     st.title("🎮 Immaculate Grid")
     today = date.today()
     st.caption(
-        f"Daily puzzle — {today.strftime('%B %d, %Y')}  |  New grid at midnight  |  "
-        f"Name a player rostered on **both** teams (rows × columns) at any point in league history"
+        f"{today.strftime('%B %d, %Y')}  ·  Name a player rostered on "
+        f"**both** teams (row × column) at any point in league history  ·  Resets at midnight"
     )
 
-    # Build team map from the most recent season that has rosters
     current_lid = seasons[0]["league_id"]
     teams = build_team_map(get_users(current_lid), get_rosters(current_lid))
 
-    # Build cross-season player history
     with st.spinner("Building league history…"):
-        history = build_player_team_history(
-            tuple(lg["league_id"] for lg in seasons)
-        )
+        history = build_player_team_history(tuple(lg["league_id"] for lg in seasons))
 
-    seed = daily_seed()
     with st.spinner("Generating today's grid…"):
-        row_items, col_items = generate_valid_grid(teams, history, players, seed)
+        row_items, col_items = generate_valid_grid(teams, history, players, daily_seed())
 
-    # Session state — reset each new day
+    # ── Session state ─────────────────────────────────────────────────────────
     if st.session_state.get("ig_date") != str(today):
         st.session_state.ig_date      = str(today)
         st.session_state.ig_submitted = False
         st.session_state.ig_results   = {}
         st.session_state.ig_score     = 0
-        st.session_state.ig_used      = set()   # prevent reusing same player
 
     submitted = st.session_state.ig_submitted
 
-    # ── Grid render helper ────────────────────────────────────────────────────
-    def col_header_html(item):
-        if item["type"] == "team":
-            return (f'<div style="background:#313244;border-radius:10px;padding:8px 6px;'
-                    f'text-align:center;font-weight:700;color:#cdd6f4;font-size:.82rem;'
-                    f'min-height:56px;display:flex;flex-direction:column;justify-content:center;'
-                    f'line-height:1.3">{item["name"]}<br>'
-                    f'<span style="font-size:.68rem;font-weight:400;color:#6c7086">'
-                    f'{item["mgr"]}</span></div>')
-        return (f'<div style="background:#45475a;border-radius:10px;padding:8px 6px;'
-                f'text-align:center;font-weight:700;color:#f9e2af;font-size:.85rem;'
-                f'min-height:56px;display:flex;flex-direction:column;justify-content:center">'
-                f'{item["name"]}</div>')
-
-    def render_grid_shell(with_inputs):
-        """Mobile-friendly layout: column headers once at top, then each row is a
-        full-width banner + 3 equal-width cells beneath it."""
-        # ── Column header row ────────────────────────────────────────────────
-        hdr = st.columns([0.01, 1, 1, 1])   # tiny spacer + 3 equal col headers
-        hdr[0].markdown("", unsafe_allow_html=True)
-        for j, c_item in enumerate(col_items):
-            hdr[j+1].markdown(col_header_html(c_item), unsafe_allow_html=True)
-
-        # ── Three data rows ──────────────────────────────────────────────────
-        if with_inputs:
-            inputs = {}
-            for i, r_item in enumerate(row_items):
-                # Full-width row header
-                st.markdown(
-                    f'<div class="ig-row-hdr">{r_item["name"]}'
-                    f'<span>({r_item["mgr"]})</span></div>',
-                    unsafe_allow_html=True,
-                )
-                cells = st.columns(3)
-                for j, c_item in enumerate(col_items):
-                    with cells[j]:
-                        # Tiny column-name reminder so each input is self-contained
-                        st.markdown(
-                            f'<div style="font-size:.65rem;color:#6c7086;text-align:center;'
-                            f'margin-bottom:2px;line-height:1.2">{c_item["name"]}</div>',
-                            unsafe_allow_html=True,
-                        )
-                        inputs[(i,j)] = st.text_input(
-                            "p", label_visibility="collapsed",
-                            placeholder="Name…",
-                            key=f"ig_g_{i}_{j}",
-                        )
-            return inputs
-        else:
-            results = st.session_state.ig_results
-            for i, r_item in enumerate(row_items):
-                st.markdown(
-                    f'<div class="ig-row-hdr">{r_item["name"]}'
-                    f'<span>({r_item["mgr"]})</span></div>',
-                    unsafe_allow_html=True,
-                )
-                cells = st.columns(3)
-                for j in range(3):
-                    res = results.get((i,j), {})
-                    ok  = res.get("correct", False)
-                    txt = res.get("player") or res.get("guess") or "—"
-                    bg  = "#a6e3a115" if ok else "#f38ba815"
-                    bdr = "#a6e3a1"   if ok else "#f38ba8"
-                    ico = "✅" if ok else "❌"
-                    cells[j].markdown(
-                        f'<div style="background:{bg};border:2px solid {bdr};'
-                        f'border-radius:10px;padding:10px 4px;text-align:center;'
-                        f'min-height:64px;display:flex;flex-direction:column;'
-                        f'justify-content:center;line-height:1.3">'
-                        f'{ico}<br><span style="font-size:.78rem;color:#cdd6f4;'
-                        f'word-break:break-word">{txt}</span></div>',
-                        unsafe_allow_html=True,
-                    )
+    # ── Visual grid (HTML table — always shown) ───────────────────────────────
+    current_answers = {
+        (i, j): st.session_state.get(f"ig_g_{i}_{j}", "")
+        for i in range(3) for j in range(3)
+    }
+    st.markdown(
+        _build_grid_html(row_items, col_items, current_answers,
+                         st.session_state.ig_results, submitted),
+        unsafe_allow_html=True,
+    )
 
     # ── Input phase ───────────────────────────────────────────────────────────
     if not submitted:
+        st.markdown('<div class="sec-hdr">Your Answers</div>', unsafe_allow_html=True)
         with st.form("ig_form"):
-            inputs = render_grid_shell(with_inputs=True)
-            go = st.form_submit_button("Submit Answers ✓", use_container_width=True)
+            for i, r_item in enumerate(row_items):
+                st.markdown(
+                    f'<div style="font-size:.88rem;font-weight:700;color:#89b4fa;'
+                    f'margin:10px 0 4px;padding-left:6px;border-left:3px solid #89b4fa">'
+                    f'{r_item["name"]} '
+                    f'<span style="font-weight:400;color:#6c7086;font-size:.75rem">'
+                    f'({r_item["mgr"]})</span></div>',
+                    unsafe_allow_html=True,
+                )
+                cells = st.columns(3)
+                for j, c_item in enumerate(col_items):
+                    cells[j].text_input(
+                        c_item["name"],
+                        key=f"ig_g_{i}_{j}",
+                        placeholder="Player…",
+                    )
+            go = st.form_submit_button(
+                "✓ Submit All Answers", use_container_width=True, type="primary"
+            )
 
         if go:
             used_pids: set = set()
-            res   = {}
-            score = 0
+            res, score = {}, 0
             for i, r_item in enumerate(row_items):
                 for j, c_item in enumerate(col_items):
-                    guess = (inputs.get((i,j)) or "").strip()
+                    guess = st.session_state.get(f"ig_g_{i}_{j}", "").strip()
                     if not guess:
-                        res[(i,j)] = {"correct": False, "guess": ""}
+                        res[(i, j)] = {"correct": False, "guess": ""}
                         continue
-                    pid = find_player_by_name(guess, players)
+                    pid   = find_player_by_name(guess, players)
                     valid = (
                         pid is not None
                         and pid not in used_pids
@@ -1098,16 +1083,11 @@ def page_immaculate_grid(seasons, players):
                     )
                     if valid:
                         name = player_info(pid, players)[0]
-                        res[(i,j)] = {"correct": True, "guess": guess, "player": name}
+                        res[(i, j)] = {"correct": True, "guess": guess, "player": name}
                         used_pids.add(pid)
                         score += 1
                     else:
-                        reason = ""
-                        if pid is None:
-                            reason = "player not found"
-                        elif pid in used_pids:
-                            reason = "already used"
-                        res[(i,j)] = {"correct": False, "guess": guess, "reason": reason}
+                        res[(i, j)] = {"correct": False, "guess": guess}
             st.session_state.ig_submitted = True
             st.session_state.ig_results   = res
             st.session_state.ig_score     = score
@@ -1116,54 +1096,50 @@ def page_immaculate_grid(seasons, players):
     # ── Results phase ─────────────────────────────────────────────────────────
     else:
         score = st.session_state.ig_score
-        emoji = "🏆" if score==9 else "🔥" if score>=7 else "👍" if score>=5 else "😬"
-        color = "#a6e3a1" if score>=7 else "#f9e2af" if score>=4 else "#f38ba8"
+        emoji = "🏆" if score == 9 else "🔥" if score >= 7 else "👍" if score >= 5 else "😬"
+        color = "#a6e3a1" if score >= 7 else "#f9e2af" if score >= 4 else "#f38ba8"
         st.markdown(
-            f'<div style="text-align:center;font-size:2rem;font-weight:800;'
-            f'color:{color};margin:8px 0 16px">{emoji} {score} / 9</div>',
+            f'<div style="text-align:center;font-size:2.2rem;font-weight:800;'
+            f'color:{color};margin:4px 0 16px">{emoji}  {score} / 9</div>',
             unsafe_allow_html=True,
         )
-        render_grid_shell(with_inputs=False)
 
         col1, col2 = st.columns(2)
-        reveal = col1.button("👁️ Reveal All Answers", key="ig_reveal")
-        col2.button("🔄 Try Again", key="ig_retry",
+        reveal = col1.button("👁️ Reveal Answers", key="ig_reveal")
+        col2.button("🔄 Play Again", key="ig_retry",
                     on_click=lambda: st.session_state.update(
-                        ig_submitted=False, ig_results={}, ig_score=0))
+                        ig_submitted=False, ig_results={}, ig_score=0,
+                        **{f"ig_g_{i}_{j}": "" for i in range(3) for j in range(3)}
+                    ))
 
         if reveal:
-            st.markdown("---")
-            st.markdown("**Valid answers for each cell:**")
-            prop = [1.6, 1, 1, 1]
-            hdr = st.columns(prop)
-            hdr[0].write("")
-            for j, c_item in enumerate(col_items):
-                hdr[j+1].markdown(f"**{c_item['name']}**")
+            st.markdown('<div class="sec-hdr">All Valid Answers</div>',
+                        unsafe_allow_html=True)
             for i, r_item in enumerate(row_items):
-                row = st.columns(prop)
-                row[0].markdown(f"**{r_item['name']}**")
                 for j, c_item in enumerate(col_items):
                     answers = _cell_answers(r_item, c_item, history, players)
                     names   = sorted(player_info(p, players)[0] for p in answers)
-                    row[j+1].markdown(
-                        f'<div style="font-size:.78rem;color:#a6adc8">{", ".join(names[:8])}'
-                        f'{"…" if len(names)>8 else ""}</div>',
+                    label   = f"**{r_item['name']}** × **{c_item['name']}**"
+                    st.markdown(
+                        f"{label}: "
+                        f'<span style="color:#a6adc8;font-size:.85rem">'
+                        f'{", ".join(names[:10])}{"…" if len(names)>10 else ""}</span>',
                         unsafe_allow_html=True,
                     )
 
     # ── Rules ─────────────────────────────────────────────────────────────────
     with st.expander("How to play"):
         st.markdown("""
-**Rows** and **columns** are each a fantasy team from your league.
+**Rows** and **columns** are each a fantasy team from your league (6 different teams).
 
-For each cell, name a player who was **rostered on both** the row team and the column team
+For each of the 9 cells, name a player who was **on both** the row team and the column team
 at any point in league history (any season since 2023).
 
-- Type a player's full name or last name
 - Each player can only be used **once** across the whole grid
-- Occasionally a column will be a position or age category instead of a team —
-  then you just need a player on that row team who fits the category
-- The grid is identical for everyone and resets every day at midnight
+- Type a player's full name or last name only
+- Occasionally one column is a fun category (QB, Age ≤ 25, etc.) — then just name any player
+  on that row team matching the category
+- The puzzle is the same for everyone and resets every night at midnight
         """)
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
