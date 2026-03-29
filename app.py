@@ -2634,7 +2634,14 @@ def main():
         btn.onclick = function() {
           var tabs = par.querySelectorAll('button[role="tab"]');
           for (var t of tabs) {
-            if (t.innerText.includes('Home')) { t.click(); break; }
+            if (t.innerText.includes('Home')) {
+              if (t.getAttribute('aria-selected') === 'true') {
+                window.parent.scrollTo({top: 0, behavior: 'smooth'});
+              } else {
+                t.click();
+              }
+              break;
+            }
           }
         };
         par.body.appendChild(btn);
