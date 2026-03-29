@@ -34,6 +34,11 @@ st.set_page_config(
 
 st.markdown("""
 <style>
+/* ── Remove Streamlit header blank space ───────────── */
+header[data-testid="stHeader"] {height:0!important;min-height:0!important;visibility:hidden}
+#MainMenu {visibility:hidden}
+.main .block-container{padding-top:0.75rem!important}
+
 /* ── Base ──────────────────────────────────────────── */
 .metric-card{background:#1e1e2e;border-radius:12px;padding:16px 20px;
              border:1px solid #313244;text-align:center;margin-bottom:8px}
@@ -437,12 +442,12 @@ def page_home(seasons, players):
       .val {{font-size:.95rem;font-weight:700;color:#cdd6f4;font-family:'Inter',sans-serif}}
     </style>
     <div class="row">
-      <div class="card" onclick="go('League Office','Tools','Season Props')">
+      <div class="card" onclick="go('League Office','Tools',null)">
         <div class="ico">🎯</div>
         <div class="lbl">Season Props</div>
         <div class="val">{_open_props} open</div>
       </div>
-      <div class="card" onclick="go('League Office','Tools','League Voting')">
+      <div class="card" onclick="go('League Office','Tools',null)">
         <div class="ico">🗳️</div>
         <div class="lbl">League Voting</div>
         <div class="val">{_active_votes} active</div>
@@ -2569,7 +2574,6 @@ def page_tools(seasons, players):
                     use_container_width=True,
                 ):
                     st.session_state.active_tool = None if is_active else key
-                    st.rerun()
 
     if active:
         st.markdown("---")
