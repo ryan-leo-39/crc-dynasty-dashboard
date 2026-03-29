@@ -1992,7 +1992,16 @@ def _tool_lottery(seasons):
         return
 
     opts = {s["season"]: s["league_id"] for s in all_seasons}
-    sel  = st.selectbox("Season", list(opts.keys()), key="lot_season")
+
+    # Always include the upcoming draft year (next calendar year) using the
+    # most recent season's standings so the lottery can be run before a new
+    # Sleeper league is created for that year.
+    most_recent   = all_seasons[0]
+    upcoming_year = str(int(most_recent["season"]) + 1)
+    if upcoming_year not in opts:
+        opts = {upcoming_year: most_recent["league_id"], **opts}
+
+    sel  = st.selectbox("Draft Year", list(opts.keys()), key="lot_season")
     lid  = opts[sel]
 
     rosters = get_rosters(lid)
