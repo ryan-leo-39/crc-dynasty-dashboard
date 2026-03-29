@@ -299,6 +299,25 @@ def find_player_by_name(guess, players):
             return pid
     return None
 
+def build_player_options(players):
+    """Return [None, pid, ...] sorted by search_rank then last name — for selectboxes."""
+    ranked = sorted(
+        [pid for pid, p in players.items() if p.get("fantasy_positions")],
+        key=lambda pid: (players[pid].get("search_rank") or 9999,
+                         players[pid].get("last_name", ""))
+    )
+    return [None] + ranked
+
+def fmt_player(pid, players):
+    """Format a player ID as 'First Last  (POS · TEAM)' for selectbox display."""
+    if pid is None:
+        return "— type to search —"
+    p    = players.get(pid, {})
+    name = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip() or "Unknown"
+    pos  = "/".join((p.get("fantasy_positions") or [])[:2])
+    team = p.get("team") or "FA"
+    return f"{name}  ({pos} · {team})"
+
 def _make_team_item(rid, teams_dict):
     t = teams_dict[rid]
     return {"type": "team", "name": t["team_name"], "mgr": t["display_name"], "value": rid}
@@ -1004,32 +1023,25 @@ def page_trade_analyzer(seasons, players):
     # ── Player Lookup ─────────────────────────────────────────────────────────
     with tab_lookup:
         st.caption("Search any NFL player to see their dynasty value based on the selected season.")
-        search = st.text_input("Player name", placeholder="e.g. Justin Jefferson", key="player_lookup_search")
-
-        if search.strip():
-            term = search.strip().lower()
-            matches = [
-                (pid, p) for pid, p in players.items()
-                if term in f"{p.get('first_name','')} {p.get('last_name','')}".lower()
-                and p.get("fantasy_positions")
-            ]
-            matches = sorted(matches, key=lambda x: x[1].get("search_rank") or 9999)[:20]
-
-            if matches:
-                rows = []
-                for pid, p in matches:
-                    name = f"{p.get('first_name','')} {p.get('last_name','')}".strip()
-                    pos  = (p.get("fantasy_positions") or [p.get("position","?")])[0]
-                    team = p.get("team") or "FA"
-                    age  = p.get("age") or "?"
-                    dv   = dynasty_value(pid, players, player_pts)
-                    rows.append({"Player": name, "Pos": pos, "NFL Team": team,
-                                 "Age": age, "Dynasty Value": dv})
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-            else:
-                st.caption("No players found.")
-        else:
-            st.info("Start typing a player's name above.")
+        p_opts  = build_player_options(players)
+        sel_pid = st.selectbox(
+            "Player",
+            p_opts,
+            format_func=lambda pid: fmt_player(pid, players),
+            key="player_lookup_sel",
+        )
+        if sel_pid is not None:
+            p    = players[sel_pid]
+            name = f"{p.get('first_name','')} {p.get('last_name','')}".strip()
+            pos  = (p.get("fantasy_positions") or [p.get("position", "?")])[0]
+            team = p.get("team") or "FA"
+            age  = p.get("age") or "?"
+            dv   = dynasty_value(sel_pid, players, player_pts)
+            st.dataframe(
+                pd.DataFrame([{"Player": name, "Pos": pos, "NFL Team": team,
+                                "Age": age, "Dynasty Value": dv}]),
+                use_container_width=True, hide_index=True,
+            )
 
     # ── Trade Builder ─────────────────────────────────────────────────────────
     with tab_trade:
@@ -1181,12 +1193,16 @@ def page_immaculate_grid(seasons, players):
         st.session_state.ig_submitted = False
         st.session_state.ig_results   = {}
         st.session_state.ig_score     = 0
+        for _i in range(3):
+            for _j in range(3):
+                st.session_state.pop(f"ig_g_{_i}_{_j}", None)
 
     submitted = st.session_state.ig_submitted
 
     # ── Visual grid (HTML table — always shown) ───────────────────────────────
     current_answers = {
-        (i, j): st.session_state.get(f"ig_g_{i}_{j}", "")
+        (i, j): (fmt_player(st.session_state.get(f"ig_g_{i}_{j}"), players)
+                 if st.session_state.get(f"ig_g_{i}_{j}") is not None else "")
         for i in range(3) for j in range(3)
     }
     st.markdown(
@@ -1209,11 +1225,13 @@ def page_immaculate_grid(seasons, players):
                     unsafe_allow_html=True,
                 )
                 cells = st.columns(3)
+                _p_opts = build_player_options(players)
                 for j, c_item in enumerate(col_items):
-                    cells[j].text_input(
+                    cells[j].selectbox(
                         c_item["name"],
+                        _p_opts,
+                        format_func=lambda pid: fmt_player(pid, players),
                         key=f"ig_g_{i}_{j}",
-                        placeholder="Player…",
                     )
             go = st.form_submit_button(
                 "✓ Submit All Answers", use_container_width=True, type="primary"
@@ -1224,14 +1242,13 @@ def page_immaculate_grid(seasons, players):
             res, score = {}, 0
             for i, r_item in enumerate(row_items):
                 for j, c_item in enumerate(col_items):
-                    guess = st.session_state.get(f"ig_g_{i}_{j}", "").strip()
-                    if not guess:
+                    pid = st.session_state.get(f"ig_g_{i}_{j}")
+                    if pid is None:
                         res[(i, j)] = {"correct": False, "guess": ""}
                         continue
-                    pid   = find_player_by_name(guess, players)
+                    guess = fmt_player(pid, players)
                     valid = (
-                        pid is not None
-                        and pid not in used_pids
+                        pid not in used_pids
                         and _check_grid_item(pid, r_item, history, players)
                         and _check_grid_item(pid, c_item, history, players)
                     )
