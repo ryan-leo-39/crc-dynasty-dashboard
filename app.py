@@ -489,7 +489,7 @@ def page_home(seasons, players):
       }}, 250);
     }}
     </script>
-    """, height=185, scrolling=False)
+    """, height=200, scrolling=False)
 
     r1c1, r1c2 = st.columns(2)
     r2c1, r2c2 = st.columns(2)
