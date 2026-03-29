@@ -581,136 +581,155 @@ def page_teams(seasons, players):
                           font_color="#cdd6f4")
         st.plotly_chart(fig, use_container_width=True)
 
-# ─── Page: Matchups ───────────────────────────────────────────────────────────
+# ─── Page: Schedule & Playoffs ───────────────────────────────────────────────
 
-def page_matchups(seasons, players):
-    st.title("📅 Matchups")
-    completed = [s for s in seasons if s["status"]=="complete"]
-    if not completed:
-        st.info("No completed seasons available.")
+def page_schedule(seasons, players):
+    st.title("📅 Schedule & Playoffs")
+
+    avail = [s for s in seasons if s["status"] in ("complete", "in_season", "post_season")]
+    if not avail:
+        st.info("No seasons available.")
         return
 
-    opts = {lg["season"]: lg["league_id"] for lg in completed}
-    sel  = st.selectbox("Season", list(opts.keys()), key="matchups_season")
-    lid  = opts[sel]
-    lg   = get_league(lid)
-    last = lg["settings"].get("last_scored_leg", 17)
-    pw   = lg["settings"].get("playoff_week_start", 14)
+    opts  = {lg["season"]: lg["league_id"] for lg in avail}
+    sel   = st.selectbox("Season", list(opts.keys()), key="schedule_season")
+    lid   = opts[sel]
+    lg    = get_league(lid)
+    pw    = lg["settings"].get("playoff_week_start", 14)
+    last  = lg["settings"].get("last_scored_leg", 17)
     teams = build_team_map(get_users(lid), get_rosters(lid))
 
-    week = st.slider("Week", 1, last, 1, key="matchups_week")
-    mups = get_matchups(lid, week)
-    groups: dict = {}
-    for m in mups:
-        mid = m.get("matchup_id")
-        groups.setdefault(mid, []).append(m)
+    tab_reg, tab_po = st.tabs(["📆 Regular Season", "🏆 Playoffs"])
 
-    badge = "🏆 Playoff" if week >= pw else "📆 Regular Season"
-    st.markdown(f"**Week {week}** — {badge}")
+    # ── Regular Season ────────────────────────────────────────────────────────
+    with tab_reg:
+        reg_last = pw - 1
+        week = st.slider("Week", 1, reg_last, 1, key="schedule_week")
+        mups = get_matchups(lid, week)
+        groups: dict = {}
+        for m in mups:
+            groups.setdefault(m.get("matchup_id"), []).append(m)
 
-    for mid, pair in sorted(groups.items()):
-        if len(pair) < 2:
-            continue
-        a, b  = sorted(pair, key=lambda x: x.get("points") or 0, reverse=True)
-        ta    = teams.get(a["roster_id"], {})
-        tb    = teams.get(b["roster_id"], {})
-        pa, pb = a.get("points") or 0, b.get("points") or 0
-        c1, cm, c2 = st.columns([5,1,5])
-        with c1:
-            col = "#a6e3a1" if pa>pb else "#f38ba8"
-            st.markdown(f"""<div style="background:#1e1e2e;border:1px solid #313244;
-            border-radius:10px;padding:14px 18px">
-            <div style="color:#a6adc8;font-size:.8rem">{ta.get('display_name','')}</div>
-            <div style="font-size:1.05rem;font-weight:600;color:#cdd6f4">{ta.get('team_name','?')}</div>
-            <div style="font-size:2rem;font-weight:800;color:{col}">{pa:.2f}</div></div>""",
-            unsafe_allow_html=True)
-        with cm:
-            st.markdown("<div style='text-align:center;padding-top:28px;color:#6c7086'>vs</div>",
-                        unsafe_allow_html=True)
-        with c2:
-            col = "#a6e3a1" if pb>pa else "#f38ba8"
-            st.markdown(f"""<div style="background:#1e1e2e;border:1px solid #313244;
-            border-radius:10px;padding:14px 18px;text-align:right">
-            <div style="color:#a6adc8;font-size:.8rem">{tb.get('display_name','')}</div>
-            <div style="font-size:1.05rem;font-weight:600;color:#cdd6f4">{tb.get('team_name','?')}</div>
-            <div style="font-size:2rem;font-weight:800;color:{col}">{pb:.2f}</div></div>""",
-            unsafe_allow_html=True)
-        st.markdown("")
+        st.markdown(f"**Week {week} — 📆 Regular Season**")
+        for mid, pair in sorted(groups.items()):
+            if len(pair) < 2:
+                continue
+            a, b   = sorted(pair, key=lambda x: x.get("points") or 0, reverse=True)
+            ta, tb = teams.get(a["roster_id"], {}), teams.get(b["roster_id"], {})
+            pa, pb = a.get("points") or 0, b.get("points") or 0
+            c1, cm, c2 = st.columns([5, 1, 5])
+            with c1:
+                col = "#a6e3a1" if pa > pb else "#f38ba8"
+                st.markdown(
+                    f'<div style="background:#1e1e2e;border:1px solid #313244;border-radius:10px;padding:14px 18px">'
+                    f'<div style="color:#a6adc8;font-size:.8rem">{ta.get("display_name","")}</div>'
+                    f'<div style="font-size:1.05rem;font-weight:600;color:#cdd6f4">{ta.get("team_name","?")}</div>'
+                    f'<div style="font-size:2rem;font-weight:800;color:{col}">{pa:.2f}</div></div>',
+                    unsafe_allow_html=True)
+            with cm:
+                st.markdown("<div style='text-align:center;padding-top:28px;color:#6c7086'>vs</div>",
+                            unsafe_allow_html=True)
+            with c2:
+                col = "#a6e3a1" if pb > pa else "#f38ba8"
+                st.markdown(
+                    f'<div style="background:#1e1e2e;border:1px solid #313244;border-radius:10px;padding:14px 18px;text-align:right">'
+                    f'<div style="color:#a6adc8;font-size:.8rem">{tb.get("display_name","")}</div>'
+                    f'<div style="font-size:1.05rem;font-weight:600;color:#cdd6f4">{tb.get("team_name","?")}</div>'
+                    f'<div style="font-size:2rem;font-weight:800;color:{col}">{pb:.2f}</div></div>',
+                    unsafe_allow_html=True)
+            st.markdown("")
 
-# ─── Page: Playoffs ───────────────────────────────────────────────────────────
-
-def page_playoffs(seasons, players):
-    st.title("🏆 Playoffs")
-    completed = [s for s in seasons if s["status"]=="complete"]
-    if not completed:
-        st.info("No completed seasons available.")
-        return
-
-    opts = {lg["season"]: lg["league_id"] for lg in completed}
-    sel  = st.selectbox("Season", list(opts.keys()), key="playoffs_season")
-    lid  = opts[sel]
-    lg   = get_league(lid)
-    pw   = lg["settings"].get("playoff_week_start", 14)
-    last = lg["settings"].get("last_scored_leg", 17)
-    teams = build_team_map(get_users(lid), get_rosters(lid))
-
-    # Fetch bracket + all playoff scores
-    try:
-        wb = get_winners_bracket(lid)
-        lb = get_losers_bracket(lid)
-    except Exception:
-        st.error("Could not load bracket data.")
-        return
-
-    # Build score lookup: (roster_id, week) → points
-    score_lookup: dict = {}
-    for w in range(pw, last + 1):
+    # ── Playoffs ──────────────────────────────────────────────────────────────
+    with tab_po:
         try:
-            for m in get_matchups(lid, w):
-                score_lookup[(m["roster_id"], w)] = m.get("points", 0)
+            wb = get_winners_bracket(lid)
+            lb = get_losers_bracket(lid)
         except Exception:
-            pass
+            st.info("Bracket not available yet.")
+            return
 
-    # Map bracket matchup → week
-    # Sleeper bracket rounds: r=1 → first playoff week, r=2 → next, etc.
-    def bracket_week(r):
-        return pw + r - 1
+        # Score lookup: (roster_id, week) → points
+        score_lookup: dict = {}
+        for w in range(pw, last + 1):
+            try:
+                for m in get_matchups(lid, w):
+                    score_lookup[(m["roster_id"], w)] = m.get("points", 0)
+            except Exception:
+                pass
 
-    def render_bracket(bracket, title):
-        st.markdown(f'<div class="sec-hdr">{title}</div>', unsafe_allow_html=True)
-        rounds = sorted(set(m["r"] for m in bracket))
-        for rnd in rounds:
-            matches = [m for m in bracket if m["r"] == rnd]
-            w = bracket_week(rnd)
-            round_name = ["Quarterfinals","Semifinals","Championship","Final"][min(rnd-1,3)]
-            st.markdown(f"**Round {rnd} — {round_name} (Week {w})**")
-            cols = st.columns(len(matches))
-            for i, match in enumerate(matches):
-                t1_id = match.get("t1")
-                t2_id = match.get("t2")
-                winner = match.get("w")
-                t1 = teams.get(t1_id, {})
-                t2 = teams.get(t2_id, {})
-                s1 = score_lookup.get((t1_id, w), None) if t1_id else None
-                s2 = score_lookup.get((t2_id, w), None) if t2_id else None
-                with cols[i]:
-                    def row(tid, team, score):
+        def render_bracket(bracket, is_winners):
+            if not bracket:
+                return
+            rounds    = sorted({m["r"] for m in bracket})
+            max_round = max(rounds)
+
+            for rnd in rounds:
+                matches  = [m for m in bracket if m["r"] == rnd]
+                week     = pw + rnd - 1
+                is_champ = is_winners and rnd == max_round
+                is_third = (not is_winners) and rnd == max_round
+
+                if is_champ:
+                    label = "🏆 Championship Game"
+                elif is_third:
+                    label = "🥉 3rd Place Game"
+                elif is_winners and rnd == max_round - 1:
+                    label = "Semifinals"
+                elif is_winners:
+                    label = "Quarterfinals"
+                elif rnd == max_round - 1:
+                    label = "Consolation Semifinals"
+                else:
+                    label = f"Round {rnd}"
+
+                border_color = "#f9e2af" if is_champ else ("#cd7f32" if is_third else "#313244")
+                st.markdown(
+                    f'<div style="color:{"#f9e2af" if is_champ else "#cdd6f4"};'
+                    f'font-size:{"1.15rem" if is_champ else "1rem"};font-weight:700;'
+                    f'margin:16px 0 8px 0">{label} — Week {week}</div>',
+                    unsafe_allow_html=True
+                )
+
+                cols = st.columns(len(matches))
+                for i, match in enumerate(matches):
+                    t1_id  = match.get("t1")
+                    t2_id  = match.get("t2")
+                    winner = match.get("w")
+                    t1     = teams.get(t1_id, {})
+                    t2     = teams.get(t2_id, {})
+                    s1     = score_lookup.get((t1_id, week)) if t1_id else None
+                    s2     = score_lookup.get((t2_id, week)) if t2_id else None
+
+                    def matchup_row(tid, team, score):
                         if tid is None:
                             return "<div style='color:#6c7086;font-size:.85rem'>TBD</div>"
                         is_win = tid == winner
-                        name   = team.get("team_name","?")
-                        mgr    = team.get("display_name","?")
-                        sc_str = f"<span style='font-size:1.2rem;font-weight:700;color:{'#a6e3a1' if is_win else '#cdd6f4'}'>{score:.2f}</span>" if score is not None else ""
-                        champ  = " 🏆" if is_win and rnd == max(rounds) else ""
-                        return f"""<div style="{'font-weight:700;color:#cdd6f4' if is_win else 'color:#888'}">
-                        {name}{champ}<br><span style="font-size:.75rem;color:#6c7086">{mgr}</span><br>{sc_str}</div>"""
-                    st.markdown(f"""<div class="bracket-match">
-                    {row(t1_id,t1,s1)}<hr style="border-color:#313244;margin:6px 0">
-                    {row(t2_id,t2,s2)}</div>""", unsafe_allow_html=True)
-            st.markdown("")
+                        name   = team.get("team_name", "?")
+                        mgr    = team.get("display_name", "?")
+                        trophy = " 🏆" if is_win and is_champ else (" 🥉" if is_win and is_third else "")
+                        score_html = (f"<span style='font-size:1.2rem;font-weight:700;"
+                                      f"color:{'#a6e3a1' if is_win else '#cdd6f4'}'>"
+                                      f"{score:.2f}</span>") if score is not None else ""
+                        color = "#cdd6f4" if is_win else "#888"
+                        return (f'<div style="font-weight:{"700" if is_win else "400"};color:{color}">'
+                                f'{name}{trophy}<br>'
+                                f'<span style="font-size:.75rem;color:#6c7086">{mgr}</span><br>'
+                                f'{score_html}</div>')
 
-    render_bracket(wb, "🥇 Winners Bracket")
-    render_bracket(lb, "🥈 Losers Bracket")
+                    with cols[i]:
+                        st.markdown(
+                            f'<div style="background:#1e1e2e;border:2px solid {border_color};'
+                            f'border-radius:10px;padding:12px 16px;margin:4px 0">'
+                            f'{matchup_row(t1_id,t1,s1)}'
+                            f'<hr style="border-color:#313244;margin:6px 0">'
+                            f'{matchup_row(t2_id,t2,s2)}</div>',
+                            unsafe_allow_html=True
+                        )
+                st.markdown("")
+
+        render_bracket(wb, is_winners=True)
+        st.markdown("---")
+        render_bracket(lb, is_winners=False)
 
 # ─── Page: Transactions ───────────────────────────────────────────────────────
 
@@ -2068,23 +2087,22 @@ def main():
         players = get_players()
 
     tabs = st.tabs([
-        "🏠 Home", "📊 Standings", "🏟️ Teams", "📅 Matchups",
-        "🏆 Playoffs", "💱 Transactions", "📜 Drafts",
-        "💰 Values", "🎮 Grid", "🛠️ Tools", "📈 Stats", "⚔️ Rivalries", "📖 Wiki",
+        "🏠 Home", "📊 Standings", "🏟️ Teams", "📅 Schedule",
+        "💱 Transactions", "📜 Drafts", "💰 Values",
+        "🎮 Grid", "🛠️ Tools", "📈 Stats", "⚔️ Rivalries", "📖 Wiki",
     ])
     with tabs[0]:  page_home(seasons, players)
     with tabs[1]:  page_standings(seasons, players)
     with tabs[2]:  page_teams(seasons, players)
-    with tabs[3]:  page_matchups(seasons, players)
-    with tabs[4]:  page_playoffs(seasons, players)
-    with tabs[5]:  page_transactions(seasons, players)
-    with tabs[6]:  page_draft_grades(seasons, players)
-    with tabs[7]:  page_trade_analyzer(seasons, players)
-    with tabs[8]:  page_immaculate_grid(seasons, players)
-    with tabs[9]:  page_tools(seasons, players)
-    with tabs[10]: page_stats(seasons)
-    with tabs[11]: page_rivalries(seasons)
-    with tabs[12]: page_wiki()
+    with tabs[3]:  page_schedule(seasons, players)
+    with tabs[4]:  page_transactions(seasons, players)
+    with tabs[5]:  page_draft_grades(seasons, players)
+    with tabs[6]:  page_trade_analyzer(seasons, players)
+    with tabs[7]:  page_immaculate_grid(seasons, players)
+    with tabs[8]:  page_tools(seasons, players)
+    with tabs[9]:  page_stats(seasons)
+    with tabs[10]: page_rivalries(seasons)
+    with tabs[11]: page_wiki()
 
 if __name__ == "__main__":
     main()
