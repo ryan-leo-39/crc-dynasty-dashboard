@@ -2,13 +2,16 @@
 CRC Dynasty Dashboard  — Sleeper Fantasy Football
 """
 import hashlib
+import json
 import random
+import uuid
 import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, date
+from pathlib import Path
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 LEAGUE_ID = "1312122172180824064"
@@ -159,6 +162,19 @@ def build_player_team_history(league_ids_tuple):
     return {k: frozenset(v) for k, v in history.items()}
 
 @st.cache_data(ttl=300)
+def get_player_season_pts(league_id, last_week):
+    """Aggregate per-player fantasy points from league matchup data (uses league scoring)."""
+    pts: dict = {}
+    for w in range(1, last_week + 1):
+        try:
+            for m in get_matchups(league_id, w):
+                for pid, fp in (m.get("players_points") or {}).items():
+                    pts[str(pid)] = pts.get(str(pid), 0.0) + float(fp)
+        except Exception:
+            pass
+    return pts
+
+@st.cache_data(ttl=300)
 def get_all_transactions(league_id, last_week):
     txns = []
     for w in range(1, last_week + 1):
@@ -201,25 +217,40 @@ def fpts(s, key="fpts"):
 
 # ─── Dynasty value model ──────────────────────────────────────────────────────
 
-PEAK_AGES = {"QB": 28, "WR": 26, "RB": 24, "TE": 27, "K": 30}
-POS_BASES = {"QB": 100, "WR": 85, "TE": 80, "RB": 75, "K": 10}
+PEAK_AGES    = {"QB": 28, "WR": 26, "RB": 24, "TE": 27, "K": 30}
+POS_BASES    = {"QB": 100, "WR": 85, "TE": 80, "RB": 75, "K": 10}
+# Fantasy points a true elite player scores in a season (used to normalize performance)
+POS_ELITE_FP = {"QB": 380, "WR": 220, "RB": 220, "TE": 170, "K": 140}
 
-def dynasty_value(pid, players):
+def dynasty_value(pid, players, player_pts=None):
     p    = players.get(str(pid), {})
     pos  = (p.get("fantasy_positions") or [p.get("position","")])[0]
     age  = p.get("age")
     base = POS_BASES.get(pos, 30)
-    if not age or pos not in PEAK_AGES:
-        return round(base * 0.5, 1)
-    peak = PEAK_AGES[pos]
-    if age <= peak:
-        mult = 0.5 + 0.5 * max(0.0, 1 - (peak - age) * 0.10)
-    else:
-        mult = max(0.05, 1 - (age - peak) * 0.13)
-    return round(base * mult, 1)
 
-def roster_total_value(pids, players):
-    return sum(dynasty_value(p, players) for p in pids)
+    # Age component — same curve as before
+    if not age or pos not in PEAK_AGES:
+        age_score = base * 0.5
+    else:
+        peak = PEAK_AGES[pos]
+        if age <= peak:
+            mult = 0.5 + 0.5 * max(0.0, 1 - (peak - age) * 0.10)
+        else:
+            mult = max(0.05, 1 - (age - peak) * 0.13)
+        age_score = base * mult
+
+    # Performance component — actual fantasy points from league matchups
+    if player_pts is not None:
+        fp    = player_pts.get(str(pid), 0.0)
+        elite = POS_ELITE_FP.get(pos, 200)
+        perf_score = base * min(1.0, fp / elite)
+        # 60% recent production, 40% age trajectory
+        return round(0.6 * perf_score + 0.4 * age_score, 1)
+
+    return round(age_score, 1)
+
+def roster_total_value(pids, players, player_pts=None):
+    return sum(dynasty_value(p, players, player_pts) for p in pids)
 
 # ─── Immaculate Grid ──────────────────────────────────────────────────────────
 # Primary mechanic: each row and column is a fantasy team.
@@ -428,7 +459,7 @@ def page_standings(seasons, players):
 
     col1, col2 = st.columns([3,2])
     with col1:
-        st.dataframe(df, use_container_width=True, height=340)
+        st.dataframe(df, use_container_width=True, height=340, hide_index=True)
     with col2:
         fig = go.Figure()
         fig.add_trace(go.Bar(x=df["Max PF"], y=df["Team"], orientation="h",
@@ -474,6 +505,9 @@ def page_teams(seasons, players):
     sel   = st.selectbox("Season", list(opts.keys()), key="teams_season")
     lid   = opts[sel]
     teams = build_team_map(get_users(lid), get_rosters(lid))
+    lg_info   = get_league(lid)
+    last_week = lg_info["settings"].get("last_scored_leg", 17)
+    player_pts = get_player_season_pts(lid, last_week)
 
     tnames  = {rid: t["team_name"] for rid, t in teams.items()}
     sel_rid = st.selectbox("Team", list(tnames.keys()), key="teams_team",
@@ -489,7 +523,7 @@ def page_teams(seasons, players):
         (tr1c1, "Record",        f"{s.get('wins',0)}–{s.get('losses',0)}"),
         (tr1c2, "Points For",    round(fpts(s),1)),
         (tr2c1, "Points Agnst",  round(fpts(s,'fpts_against'),1)),
-        (tr2c2, "Dynasty Value", round(roster_total_value(r.get("players") or [], players),0)),
+        (tr2c2, "Dynasty Value", round(roster_total_value(r.get("players") or [], players, player_pts),0)),
     ]:
         col.markdown(f"""<div class="metric-card">
         <div class="label">{lbl}</div><div class="value">{val}</div></div>""",
@@ -511,7 +545,7 @@ def page_teams(seasons, players):
         for pid in pids:
             name, pos, nfl, age = player_info(pid, players)
             nick = meta.get(f"p_nick_{pid}", "")
-            dv   = dynasty_value(pid, players)
+            dv   = dynasty_value(pid, players, player_pts)
             rows.append({"Player": name, "Pos": pos, "NFL": nfl,
                          "Age": age, "Dyn Value": dv, "Nickname": nick})
         df = pd.DataFrame(rows).sort_values(["Pos","Player"])
@@ -759,6 +793,9 @@ def page_draft_grades(seasons, players):
     lid  = opts[sel]
     teams  = build_team_map(get_users(lid), get_rosters(lid))
     drafts = get_drafts(lid)
+    lg_info    = get_league(lid)
+    last_week  = lg_info["settings"].get("last_scored_leg", 17)
+    player_pts = get_player_season_pts(lid, last_week)
 
     if not drafts:
         st.info("No draft found for this season.")
@@ -796,7 +833,7 @@ def page_draft_grades(seasons, players):
         pid  = pk.get("player_id")
         name, pos, nfl, age = player_info(pid, players)
         rid  = pk.get("roster_id") or pk.get("picked_by")
-        dv   = dynasty_value(pid, players)
+        dv   = dynasty_value(pid, players, player_pts)
         rows.append({
             "Pick":   pk.get("pick_no"),   "Rd":     pk.get("round"),
             "Player": name,                "Pos":    pos,
@@ -870,12 +907,15 @@ def page_draft_grades(seasons, players):
 
 def page_trade_analyzer(seasons, players):
     st.title("💰 Trade Analyzer")
-    st.caption("Dynasty value is estimated from position & age. Use as a guide, not gospel.")
+    st.caption("Dynasty value blends actual fantasy production (60%) with age trajectory (40%). Use as a guide, not gospel.")
 
     opts  = {lg["season"]: lg["league_id"] for lg in seasons}
     sel   = st.selectbox("Season", list(opts.keys()), key="trade_season")
     lid   = opts[sel]
     teams = build_team_map(get_users(lid), get_rosters(lid))
+    lg_info    = get_league(lid)
+    last_week  = lg_info["settings"].get("last_scored_leg", 17)
+    player_pts = get_player_season_pts(lid, last_week)
 
     tnames  = {rid: f"{t['team_name']} ({t['display_name']})" for rid, t in teams.items()}
     t_ids   = list(tnames.keys())
@@ -894,7 +934,7 @@ def page_trade_analyzer(seasons, players):
 
     def pid_label(pid):
         name, pos, nfl, age = player_info(pid, players)
-        dv = dynasty_value(pid, players)
+        dv = dynasty_value(pid, players, player_pts)
         return f"{name} ({pos}, {nfl}, Age {age}) — Val {dv}"
 
     st.markdown('<div class="sec-hdr">Build the Trade</div>', unsafe_allow_html=True)
@@ -913,8 +953,8 @@ def page_trade_analyzer(seasons, players):
         return
 
     # Compute values
-    val1_sending = sum(dynasty_value(p, players) for p in sends1)
-    val2_sending = sum(dynasty_value(p, players) for p in sends2)
+    val1_sending = sum(dynasty_value(p, players, player_pts) for p in sends1)
+    val2_sending = sum(dynasty_value(p, players, player_pts) for p in sends2)
     diff         = val2_sending - val1_sending  # positive = Team 1 wins
 
     c1, c2, c3 = st.columns(3)
@@ -944,7 +984,7 @@ def page_trade_analyzer(seasons, players):
                 for pid in sends:
                     name, pos, nfl, age = player_info(pid, players)
                     rows.append({"Player":name,"Pos":pos,"NFL":nfl,
-                                 "Age":age,"DynVal":dynasty_value(pid,players)})
+                                 "Age":age,"DynVal":dynasty_value(pid,players,player_pts)})
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
             else:
                 st.caption("Nothing selected")
@@ -1142,6 +1182,465 @@ at any point in league history (any season since 2023).
 - The puzzle is the same for everyone and resets every night at midnight
         """)
 
+# ─── Page: Wiki ───────────────────────────────────────────────────────────────
+
+def page_wiki():
+    st.title("📖 League Wiki")
+    st.caption("Everything you need to know about the CRC Dynasty Dashboard.")
+
+    # ── About ─────────────────────────────────────────────────────────────────
+    with st.expander("🏈 About This App", expanded=True):
+        st.markdown("""
+**CRC Dynasty Dashboard** is a custom-built web app for the CRC Dynasty Fantasy Football League,
+built and maintained by **Ryan Leo**.
+
+The goal is to give every manager a single place to track standings, rosters, matchups, trades,
+and dynasty value — without having to dig through Sleeper's native UI for everything.
+All data is pulled live from the **Sleeper API**, so scores and rosters are always up to date.
+
+The app was built with **Python + Streamlit** and runs directly in your browser.
+No login required — just open the link and go.
+        """)
+
+    # ── Dynasty Value ─────────────────────────────────────────────────────────
+    with st.expander("💎 How Dynasty Value Is Calculated"):
+        st.markdown("""
+Dynasty value is a single number that estimates how much a player is worth to a dynasty roster right now.
+It blends two things:
+
+**1. Recent Fantasy Production (60% weight)**
+The player's actual fantasy points scored in the selected season — using your league's own scoring settings,
+pulled directly from Sleeper. A player who scored at the level of a true elite finisher at their position
+earns a full performance score. A player who barely appeared scores near zero.
+
+| Position | "Elite" season (full score) |
+|----------|-----------------------------|
+| QB | 380 pts |
+| WR | 220 pts |
+| RB | 220 pts |
+| TE | 170 pts |
+| K  | 140 pts |
+
+**2. Age Trajectory (40% weight)**
+A curve based on when each position typically peaks. Young players still climbing toward their peak
+score higher than veterans on the decline — even with similar recent production.
+
+| Position | Peak Age |
+|----------|----------|
+| QB | 28 |
+| WR | 26 |
+| RB | 24 |
+| TE | 27 |
+
+- **Before peak:** value ramps from 50% → 100% of the position base as the player approaches their peak age
+- **After peak:** value drops ~13% per year past peak, floored at 5%
+
+**Position Base Values** (the ceiling each position can reach): QB 100, WR 85, TE 80, RB 75, K 10.
+
+**Why blend both?**
+Pure age-based value ignores actual performance — a busted young RB still looks valuable.
+Pure production ignores upside — a 22-year-old breakout WR is worth more than his one good season suggests.
+The blend rewards players who are both producing *and* young.
+
+> **Note:** Players without age data or who didn't appear in league matchups fall back to the age-only estimate.
+        """)
+
+    # ── Standings ─────────────────────────────────────────────────────────────
+    with st.expander("📊 Standings & Stats Explained"):
+        st.markdown("""
+| Column | Meaning |
+|--------|---------|
+| **W / L** | Regular season wins and losses |
+| **PF** | Points For — total fantasy points scored |
+| **PA** | Points Against — total points scored against you |
+| **Max PF** | Maximum possible points — what you *would* have scored with a perfect lineup every week |
+| **Eff%** | Efficiency — PF ÷ Max PF. Measures how well managers set their lineups. 100% = perfect every week |
+
+The **PF vs Max PF** chart shows the gap between what you scored and what you left on the bench.
+A small gap means good lineup management. A large gap means you left points sitting on your bench.
+        """)
+
+    # ── Draft Lottery ─────────────────────────────────────────────────────────
+    with st.expander("🎰 Draft Lottery — How It Works"):
+        st.markdown("""
+The draft lottery determines pick order for the following season's rookie/free agent draft.
+Only the **4 non-playoff teams** are entered.
+
+**Odds (weighted by finish):**
+| Finish | Odds of 1st Pick |
+|--------|-----------------|
+| 8th (Last) | 40% |
+| 7th | 30% |
+| 6th | 20% |
+| 5th | 10% |
+
+**How the draw works:**
+Each pick slot is drawn independently using weighted random selection — but without replacement.
+Once a team wins a pick slot, they're removed from the remaining draw.
+This means every team is guaranteed *a* pick, but the best odds go to the worst finishers.
+
+**The reveal** goes from 4th pick down to 1st overall — the most dramatic result last.
+Use this tool live with your league on draft night!
+        """)
+
+    # ── Immaculate Grid ───────────────────────────────────────────────────────
+    with st.expander("🎮 Immaculate Grid — How to Play"):
+        st.markdown("""
+A daily trivia challenge inspired by the MLB Immaculate Grid, adapted for your dynasty league.
+
+**Setup:**
+- The grid is **3 rows × 3 columns** — each row and column is one of your league's fantasy teams
+- Each of the 9 cells requires a player who was on **both** the row team *and* the column team
+  at some point across the full history of the league (every season since the league started)
+
+**Rules:**
+- Each player can only be used **once** — you can't put the same player in two cells
+- Type a player's full name or just their last name
+- Occasionally one column is a **special category** instead of a team (e.g. "QB", "Age ≤ 25") —
+  for those, name any player on the row team who fits the category
+- The puzzle is the **same for everyone** each day and resets at midnight
+
+**Scoring:** 1 point per correct answer, 9 possible.
+        """)
+
+    # ── League Voting ─────────────────────────────────────────────────────────
+    with st.expander("🗳️ League Voting — How It Works"):
+        st.markdown("""
+The voting system lets the league propose and vote on rule changes without needing a group chat thread.
+
+**Creating a proposal:**
+Anyone can submit a proposal with a title, description, and the season it would take effect if passed.
+
+**Voting:**
+Select your manager name and vote Yes or No. You can change your vote at any time while the proposal is open.
+
+**Closing a proposal:**
+Any manager can click "Close & Record Verdict" when the league is done deliberating.
+The result is determined by simple majority — more Yes votes than No votes = **Passed**.
+
+**History:**
+All closed proposals (passed and failed) are recorded permanently in the Vote History tab,
+including the final vote count and implementation season.
+        """)
+
+    # ── Data & Privacy ────────────────────────────────────────────────────────
+    with st.expander("🔒 Data & Privacy"):
+        st.markdown("""
+- All fantasy data comes from the **Sleeper public API** — no login or credentials required
+- Player data is cached for **72 hours**; league/roster data refreshes every **5 minutes**
+- The voting system stores data locally in a `votes.json` file on the server hosting the app
+- No personal data beyond your Sleeper display name is stored anywhere
+        """)
+
+    # ── FAQ ───────────────────────────────────────────────────────────────────
+    with st.expander("❓ FAQ"):
+        st.markdown("""
+**Q: Why doesn't my roster show the latest adds/drops?**
+A: Roster data is cached for 5 minutes. Wait a few minutes and refresh the page.
+
+**Q: The dynasty value for my player seems too low / high. Why?**
+A: Value is based on your league's own matchup scoring for the *selected season*.
+If you're viewing a past season, it reflects that season's production.
+Players who were injured or barely played will show low values regardless of age.
+
+**Q: Can I use the lottery tool before the season ends?**
+A: Yes — it pulls from any completed season. If the current season isn't complete yet,
+select the most recent finished season to get the right standings.
+
+**Q: The immaculate grid seems impossible. Are there always valid answers?**
+A: Yes — the grid generator requires every cell to have at least **2 distinct valid answers**
+before it's shown. If it can't find a valid grid after 600 attempts, it falls back to the easiest layout.
+
+**Q: How do I get the app updated with new features?**
+A: Contact Ryan — or submit a voting proposal in the League Voting tool. 😄
+        """)
+
+# ─── Voting helpers ───────────────────────────────────────────────────────────
+
+VOTES_FILE = Path(__file__).parent / "votes.json"
+
+def _load_votes():
+    if VOTES_FILE.exists():
+        try:
+            return json.loads(VOTES_FILE.read_text())
+        except Exception:
+            pass
+    return {"proposals": []}
+
+def _save_votes(data):
+    VOTES_FILE.write_text(json.dumps(data, indent=2))
+
+# ─── Tool: Draft Lottery ──────────────────────────────────────────────────────
+
+def _tool_lottery(seasons):
+    st.caption(
+        "The 4 non-playoff teams draw for draft position. "
+        "Last place (8th) gets 40% odds, 7th → 30%, 6th → 20%, 5th → 10%. "
+        "Picks are drawn without replacement — most exciting reveal last."
+    )
+
+    completed = [s for s in seasons if s["status"] == "complete"]
+    if not completed:
+        st.info("No completed seasons to pull standings from.")
+        return
+
+    opts = {s["season"]: s["league_id"] for s in completed}
+    sel  = st.selectbox("Season", list(opts.keys()), key="lot_season")
+    lid  = opts[sel]
+
+    rosters = get_rosters(lid)
+    teams   = build_team_map(get_users(lid), rosters)
+
+    # Sort worst → best (ascending wins, ascending PF as tiebreak)
+    sorted_rosters = sorted(
+        rosters,
+        key=lambda r: (r["settings"].get("wins", 0), fpts(r["settings"]))
+    )
+    bottom4 = sorted_rosters[:4]
+    b4_rids = [r["roster_id"] for r in bottom4]
+    odds    = [40, 30, 20, 10]
+
+    st.markdown('<div class="sec-hdr">Lottery Participants</div>', unsafe_allow_html=True)
+    cols   = st.columns(4)
+    labels = ["🔴 Last (8th)", "🟠 7th", "🟡 6th", "🟢 5th"]
+    for i, (rid, pct) in enumerate(zip(b4_rids, odds)):
+        t = teams.get(rid, {})
+        s = bottom4[i]["settings"]
+        cols[i].markdown(f"""<div class="metric-card">
+        <div class="label">{labels[i]}</div>
+        <div class="value" style="font-size:1rem">{t.get('team_name','?')}</div>
+        <div class="sub">{t.get('display_name','')} · {s.get('wins',0)}–{s.get('losses',0)}</div>
+        <div style="color:#f9e2af;font-weight:700;font-size:1.2rem;margin-top:6px">{pct}%</div>
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("")
+
+    # Reset state when season changes
+    skey = f"lottery_{sel}"
+    if st.session_state.get("_lottery_skey") != skey:
+        st.session_state._lottery_skey   = skey
+        st.session_state._lottery_result = None
+        st.session_state._lottery_step   = 0
+
+    if st.session_state._lottery_result is None:
+        if st.button("🎰 Run Lottery", type="primary", key="run_lot"):
+            remaining = list(zip(b4_rids, odds))
+            order = []
+            for _ in range(4):
+                rids_left, weights = zip(*remaining)
+                winner = random.choices(rids_left, weights=weights)[0]
+                order.append(winner)
+                remaining = [(r, w) for r, w in remaining if r != winner]
+            st.session_state._lottery_result = order  # [1st-pick winner, 2nd, 3rd, 4th]
+            st.session_state._lottery_step   = 0
+            st.rerun()
+        return
+
+    result = st.session_state._lottery_result
+    step   = st.session_state._lottery_step  # picks revealed so far (0→4, from 4th down to 1st)
+
+    pick_labels = ["🥇 1st Overall", "🥈 2nd Overall", "🥉 3rd Overall", "4️⃣ 4th Overall"]
+
+    st.markdown('<div class="sec-hdr">Draft Order Reveal</div>', unsafe_allow_html=True)
+
+    # Display from 4th pick to 1st (reveal in that order)
+    for display_pos in range(4):          # display_pos 0 = 4th pick, 3 = 1st pick
+        pick_idx   = 3 - display_pos      # index into result[] (3 = 4th pick)
+        is_revealed = step > display_pos
+
+        t = teams.get(result[pick_idx], {})
+        s = next((r["settings"] for r in sorted_rosters if r["roster_id"] == result[pick_idx]), {})
+
+        if is_revealed:
+            gold = pick_idx == 0  # 1st overall
+            bg     = "#f9e2af22" if gold else "#1e1e2e"
+            border = "#f9e2af"   if gold else "#313244"
+            st.markdown(
+                f'<div style="background:{bg};border:2px solid {border};border-radius:10px;'
+                f'padding:14px 20px;margin-bottom:8px">'
+                f'<span style="color:#a6adc8;font-size:.8rem">{pick_labels[pick_idx]}</span><br>'
+                f'<span style="color:#cdd6f4;font-size:1.15rem;font-weight:700">{t.get("team_name","?")}</span>'
+                f'<span style="color:#6c7086;font-size:.85rem;margin-left:10px">{t.get("display_name","")}</span>'
+                f'<span style="color:#6c7086;font-size:.8rem;margin-left:10px">'
+                f'{s.get("wins",0)}–{s.get("losses",0)}</span>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                f'<div style="background:#181825;border:2px dashed #45475a;border-radius:10px;'
+                f'padding:14px 20px;margin-bottom:8px;color:#6c7086">'
+                f'<span style="font-size:.8rem">{pick_labels[pick_idx]}</span>'
+                f'&nbsp;&nbsp;<span style="font-size:1rem">🎴 Not yet revealed</span></div>',
+                unsafe_allow_html=True
+            )
+
+    st.markdown("")
+
+    if step < 4:
+        next_label = ["4th", "3rd", "2nd", "1st"][step]
+        suffix     = " 🎉" if step == 3 else ""
+        if st.button(f"🎰 Reveal {next_label} Pick{suffix}", type="primary", key=f"lot_reveal_{step}"):
+            st.session_state._lottery_step += 1
+            if st.session_state._lottery_step == 4:
+                st.balloons()
+            st.rerun()
+    else:
+        st.success("🏆 Lottery complete!")
+        if st.button("🔄 Reset", key="lot_reset"):
+            st.session_state._lottery_result = None
+            st.session_state._lottery_step   = 0
+            st.rerun()
+
+# ─── Tool: League Voting ──────────────────────────────────────────────────────
+
+def _tool_voting(seasons):
+    current_lid   = seasons[0]["league_id"]
+    teams         = build_team_map(get_users(current_lid), get_rosters(current_lid))
+    manager_names = sorted(t["display_name"] for t in teams.values())
+
+    data      = _load_votes()
+    proposals = data.setdefault("proposals", [])
+
+    vt_active, vt_new, vt_history = st.tabs(["📋 Active Proposals", "➕ New Proposal", "📚 Vote History"])
+
+    # ── Active ────────────────────────────────────────────────────────────────
+    with vt_active:
+        active = [p for p in proposals if p["status"] == "open"]
+        if not active:
+            st.info("No open proposals. Create one in the 'New Proposal' tab.")
+
+        voter = st.selectbox(
+            "Voting as:",
+            ["— select your name —"] + manager_names,
+            key="voter_id"
+        )
+
+        for prop in active:
+            yes_count = sum(1 for v in prop["votes"].values() if v == "yes")
+            no_count  = sum(1 for v in prop["votes"].values() if v == "no")
+            total     = len(teams)
+
+            with st.expander(f"📜 {prop['title']}", expanded=True):
+                if prop.get("description"):
+                    st.markdown(prop["description"])
+                impl = prop.get("impl_season","")
+                st.caption(
+                    f"Opened: {prop['created_date']}  |  "
+                    f"League season: {prop.get('season','?')}"
+                    + (f"  |  Implements: {impl}" if impl else "")
+                )
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("✅ Yes", yes_count)
+                c2.metric("❌ No",  no_count)
+                c3.metric("🗳️ Voted", f"{yes_count + no_count} / {total}")
+
+                if voter != "— select your name —":
+                    existing = prop["votes"].get(voter)
+                    cy, cn   = st.columns(2)
+                    if cy.button("✅ Vote Yes", key=f"y_{prop['id']}",
+                                 type="primary" if existing == "yes" else "secondary"):
+                        prop["votes"][voter] = "yes"
+                        _save_votes(data)
+                        st.rerun()
+                    if cn.button("❌ Vote No",  key=f"n_{prop['id']}",
+                                 type="primary" if existing == "no"  else "secondary"):
+                        prop["votes"][voter] = "no"
+                        _save_votes(data)
+                        st.rerun()
+                    if existing:
+                        st.caption(f"Your current vote: **{existing.upper()}**")
+
+                if st.button("Close & Record Verdict", key=f"close_{prop['id']}"):
+                    prop["status"] = "passed" if yes_count > no_count else "failed"
+                    _save_votes(data)
+                    st.rerun()
+
+    # ── New proposal ──────────────────────────────────────────────────────────
+    with vt_new:
+        st.markdown("#### Create a New Proposal")
+        with st.form("new_proposal_form"):
+            title       = st.text_input("Rule / Proposal Title")
+            desc        = st.text_area("Description / Details")
+            impl_season = st.text_input(
+                "Implementation Season (if passed)",
+                placeholder="e.g. 2026"
+            )
+            submitted = st.form_submit_button("Submit Proposal", type="primary")
+
+        if submitted:
+            if not title.strip():
+                st.error("Please enter a title.")
+            else:
+                proposals.append({
+                    "id":           uuid.uuid4().hex[:8],
+                    "title":        title.strip(),
+                    "description":  desc.strip(),
+                    "created_date": date.today().isoformat(),
+                    "season":       seasons[0]["season"],
+                    "impl_season":  impl_season.strip(),
+                    "status":       "open",
+                    "votes":        {},
+                })
+                _save_votes(data)
+                st.success(f"Proposal '{title.strip()}' created!")
+                st.rerun()
+
+    # ── History ───────────────────────────────────────────────────────────────
+    with vt_history:
+        closed = [p for p in proposals if p["status"] in ("passed", "failed")]
+        if not closed:
+            st.info("No closed proposals yet.")
+        else:
+            for p in sorted(closed, key=lambda x: x["created_date"], reverse=True):
+                passed = p["status"] == "passed"
+                bg     = "#a6e3a122" if passed else "#f38ba822"
+                border = "#a6e3a1"   if passed else "#f38ba8"
+                icon   = "✅ PASSED" if passed else "❌ FAILED"
+                yes_v  = sum(1 for v in p["votes"].values() if v == "yes")
+                no_v   = sum(1 for v in p["votes"].values() if v == "no")
+                impl   = f" · Implementing {p['impl_season']}" if p.get("impl_season") else ""
+                st.markdown(
+                    f'<div style="background:{bg};border:1px solid {border};border-radius:10px;'
+                    f'padding:14px 20px;margin-bottom:10px">'
+                    f'<div style="display:flex;justify-content:space-between;align-items:center">'
+                    f'<span style="color:#cdd6f4;font-size:1rem;font-weight:700">{p["title"]}</span>'
+                    f'<span style="color:{border};font-size:.85rem;font-weight:700">{icon}</span></div>'
+                    + (f'<div style="color:#a6adc8;font-size:.85rem;margin-top:4px">{p["description"]}</div>' if p.get("description") else "")
+                    + f'<div style="color:#6c7086;font-size:.75rem;margin-top:6px">'
+                    f'{p["created_date"]} · {yes_v} yes / {no_v} no{impl}</div></div>',
+                    unsafe_allow_html=True
+                )
+
+# ─── Page: Tools & Links ──────────────────────────────────────────────────────
+
+def page_tools(seasons, players):
+    st.title("🛠️ Tools & Links")
+
+    st.markdown('<div class="sec-hdr">🔗 Links</div>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    for col, name, url, desc in [
+        (c1, "Sleeper",       "https://sleeper.com",       "League management, scoring & chat"),
+        (c2, "KeepTradeCut",  "https://keeptradecut.com",  "Dynasty player values & rankings"),
+    ]:
+        col.markdown(
+            f'<div class="metric-card" style="text-align:left">'
+            f'<a href="{url}" target="_blank" style="color:#89b4fa;font-size:1.05rem;'
+            f'font-weight:700;text-decoration:none">{name} ↗</a>'
+            f'<div class="sub" style="margin-top:4px">{desc}</div></div>',
+            unsafe_allow_html=True
+        )
+
+    st.markdown("")
+    tool_tab1, tool_tab2 = st.tabs(["🎰 Draft Lottery", "🗳️ League Voting"])
+
+    with tool_tab1:
+        _tool_lottery(seasons)
+
+    with tool_tab2:
+        _tool_voting(seasons)
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -1151,18 +1650,20 @@ def main():
 
     tabs = st.tabs([
         "🏠 Home", "📊 Standings", "🏟️ Teams", "📅 Matchups",
-        "🏆 Playoffs", "💱 Trades", "📜 Drafts",
-        "💰 Values", "🎮 Grid",
+        "🏆 Playoffs", "💱 Transactions", "📜 Drafts",
+        "💰 Values", "🎮 Grid", "🛠️ Tools", "📖 Wiki",
     ])
-    with tabs[0]: page_home(seasons, players)
-    with tabs[1]: page_standings(seasons, players)
-    with tabs[2]: page_teams(seasons, players)
-    with tabs[3]: page_matchups(seasons, players)
-    with tabs[4]: page_playoffs(seasons, players)
-    with tabs[5]: page_transactions(seasons, players)
-    with tabs[6]: page_draft_grades(seasons, players)
-    with tabs[7]: page_trade_analyzer(seasons, players)
-    with tabs[8]: page_immaculate_grid(seasons, players)
+    with tabs[0]:  page_home(seasons, players)
+    with tabs[1]:  page_standings(seasons, players)
+    with tabs[2]:  page_teams(seasons, players)
+    with tabs[3]:  page_matchups(seasons, players)
+    with tabs[4]:  page_playoffs(seasons, players)
+    with tabs[5]:  page_transactions(seasons, players)
+    with tabs[6]:  page_draft_grades(seasons, players)
+    with tabs[7]:  page_trade_analyzer(seasons, players)
+    with tabs[8]:  page_immaculate_grid(seasons, players)
+    with tabs[9]:  page_tools(seasons, players)
+    with tabs[10]: page_wiki()
 
 if __name__ == "__main__":
     main()
