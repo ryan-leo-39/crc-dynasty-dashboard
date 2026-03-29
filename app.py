@@ -1308,6 +1308,38 @@ def page_immaculate_grid(seasons, players):
                         unsafe_allow_html=True,
                     )
 
+    # ── Debug / Diagnostic ────────────────────────────────────────────────────
+    with st.expander("🔍 Roster History Lookup (debug)"):
+        st.caption("Use this to verify what's in the player history database.")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown("**Manager → players they've had**")
+            mgr_names = sorted({mgr for mgrs in history.values() for mgr in mgrs})
+            sel_mgr = st.selectbox("Manager", [""] + mgr_names, key="dbg_mgr")
+            if sel_mgr:
+                mgr_pids = [pid for pid, mgrs in history.items() if sel_mgr in mgrs]
+                mgr_pnames = sorted(
+                    player_info(pid, players)[0]
+                    for pid in mgr_pids
+                    if player_info(pid, players)[0] != "Unknown"
+                )
+                st.caption(f"{len(mgr_pnames)} players found")
+                st.text_area("Players", "\n".join(mgr_pnames), height=200, key="dbg_mgr_out")
+        with col_b:
+            st.markdown("**Player → managers who've had them**")
+            p_opts2 = build_player_options(players)
+            sel_dbg_pid = st.selectbox(
+                "Player",
+                p_opts2,
+                format_func=lambda pid: fmt_player(pid, players),
+                key="dbg_pid",
+            )
+            if sel_dbg_pid is not None:
+                mgrs_for_player = sorted(history.get(str(sel_dbg_pid), []))
+                st.caption(f"Found on {len(mgrs_for_player)} manager roster(s)")
+                for m in mgrs_for_player:
+                    st.write(f"• {m}")
+
     # ── Rules ─────────────────────────────────────────────────────────────────
     with st.expander("How to play"):
         st.markdown("""
