@@ -1278,7 +1278,7 @@ def build_all_time_data(league_ids_tuple):
                             continue
                         key = tuple(sorted([ma, mb]))
                         if key not in h2h:
-                            h2h[key] = {"wins": {ma: 0, mb: 0}, "games": []}
+                            h2h[key] = {"wins": {ma: 0, mb: 0}, "games": [], "playoff_meetings": 0}
                         h2h[key]["wins"].setdefault(ma, 0)
                         h2h[key]["wins"].setdefault(mb, 0)
                         winner = ma if pa_pts > pb_pts else mb
@@ -1288,6 +1288,44 @@ def build_all_time_data(league_ids_tuple):
                             "ma": ma, "pa": pa_pts,
                             "mb": mb, "pb": pb_pts,
                             "margin": abs(pa_pts - pb_pts),
+                            "playoff": False,
+                        })
+                except Exception:
+                    pass
+
+            # Playoff matchups — count toward H2H record and rivalry score
+            last_week = lg["settings"].get("last_scored_leg", 17)
+            for w in range(pw, last_week + 1):
+                try:
+                    matchups = get_matchups(lid, w)
+                    by_mid: dict = {}
+                    for m in matchups:
+                        if m.get("matchup_id"):
+                            by_mid.setdefault(m["matchup_id"], []).append(m)
+                    for pair in by_mid.values():
+                        if len(pair) != 2:
+                            continue
+                        a, b   = pair
+                        ma     = rid_to_mgr.get(a["roster_id"])
+                        mb     = rid_to_mgr.get(b["roster_id"])
+                        pa_pts = a.get("points") or 0
+                        pb_pts = b.get("points") or 0
+                        if not (ma and mb):
+                            continue
+                        key = tuple(sorted([ma, mb]))
+                        if key not in h2h:
+                            h2h[key] = {"wins": {ma: 0, mb: 0}, "games": [], "playoff_meetings": 0}
+                        h2h[key]["wins"].setdefault(ma, 0)
+                        h2h[key]["wins"].setdefault(mb, 0)
+                        h2h[key]["playoff_meetings"] += 1
+                        winner = ma if pa_pts > pb_pts else mb
+                        h2h[key]["wins"][winner] += 1
+                        h2h[key]["games"].append({
+                            "season": season, "week": w,
+                            "ma": ma, "pa": pa_pts,
+                            "mb": mb, "pb": pb_pts,
+                            "margin": abs(pa_pts - pb_pts),
+                            "playoff": True,
                         })
                 except Exception:
                     pass
@@ -1392,6 +1430,42 @@ def page_stats(seasons):
 
 # ─── Page: Rivalries ─────────────────────────────────────────────────────────
 
+def _rivalry_score(data, m1, m2):
+    """
+    Higher = better rivalry (close series + tight margins + playoff history).
+    Formula: closeness × compactness × playoff_boost × √(games)
+      closeness    = 1 - |w1-w2| / total        (1.0 = dead even, 0 = one team swept)
+      compactness  = 100 / (1 + avg_margin)      (smaller avg margin → higher)
+      playoff_boost= 1 + 0.5 × playoff_meetings  (each playoff meeting adds 50%)
+    """
+    import math
+    w1    = data["wins"].get(m1, 0)
+    w2    = data["wins"].get(m2, 0)
+    total = w1 + w2
+    if total == 0:
+        return 0.0
+    margins   = [g["margin"] for g in data["games"]]
+    avg_m     = sum(margins) / len(margins) if margins else 50.0
+    po        = data.get("playoff_meetings", 0)
+    closeness = 1 - abs(w1 - w2) / total
+    return closeness * (100 / (1 + avg_m)) * (1 + 0.5 * po) * math.sqrt(total)
+
+def _onesided_score(data, m1, m2):
+    """
+    Higher = more one-sided (big record gap + large margins).
+    Formula: imbalance × avg_margin × √(games)
+    """
+    import math
+    w1    = data["wins"].get(m1, 0)
+    w2    = data["wins"].get(m2, 0)
+    total = w1 + w2
+    if total == 0:
+        return 0.0
+    margins   = [g["margin"] for g in data["games"]]
+    avg_m     = sum(margins) / len(margins) if margins else 0.0
+    imbalance = abs(w1 - w2) / total
+    return imbalance * avg_m * math.sqrt(total)
+
 def page_rivalries(seasons):
     st.title("⚔️ Rivalries")
 
@@ -1407,7 +1481,7 @@ def page_rivalries(seasons):
     managers = sorted({m for key in h2h for m in key})
 
     # ── H2H Matrix ────────────────────────────────────────────────────────────
-    st.markdown('<div class="sec-hdr">Head-to-Head Matrix (Regular Season)</div>',
+    st.markdown('<div class="sec-hdr">Head-to-Head Matrix (All Games)</div>',
                 unsafe_allow_html=True)
     matrix_rows = []
     for mgr_r in managers:
@@ -1419,49 +1493,81 @@ def page_rivalries(seasons):
                 key = tuple(sorted([mgr_r, mgr_c]))
                 w = h2h[key]["wins"].get(mgr_r, 0) if key in h2h else 0
                 l = h2h[key]["wins"].get(mgr_c, 0) if key in h2h else 0
-                row[mgr_c] = f"{w}–{l}"
+                po = h2h[key].get("playoff_meetings", 0) if key in h2h else 0
+                cell = f"{w}–{l}"
+                if po:
+                    cell += f" ({po}🏆)"
+                row[mgr_c] = cell
         matrix_rows.append(row)
 
-    st.dataframe(
-        pd.DataFrame(matrix_rows).set_index(""),
-        use_container_width=True,
-    )
-    st.caption("Read each row as that manager's record **against** each column opponent.")
+    st.dataframe(pd.DataFrame(matrix_rows).set_index(""), use_container_width=True)
+    st.caption("W–L all-time (reg season + playoffs). 🏆 = number of playoff meetings.")
 
-    # ── Top Rivalries ─────────────────────────────────────────────────────────
-    st.markdown('<div class="sec-hdr">⚔️ Top Rivalries</div>', unsafe_allow_html=True)
-
-    riv_rows = []
+    # ── Build scored list ─────────────────────────────────────────────────────
+    scored = []
     for (m1, m2), data in h2h.items():
-        games   = data["games"]
         w1      = data["wins"].get(m1, 0)
         w2      = data["wins"].get(m2, 0)
+        games   = data["games"]
         margins = [g["margin"] for g in games]
-        riv_rows.append(dict(
+        scored.append(dict(
             m1=m1, m2=m2, w1=w1, w2=w2,
-            total=w1+w2,
-            avg_margin=round(sum(margins)/len(margins), 1) if margins else 0,
+            total=w1 + w2,
+            avg_margin=round(sum(margins) / len(margins), 1) if margins else 0,
+            po=data.get("playoff_meetings", 0),
+            riv_score=_rivalry_score(data, m1, m2),
+            one_score=_onesided_score(data, m1, m2),
         ))
-    riv_rows.sort(key=lambda x: x["total"], reverse=True)
 
-    for riv in riv_rows[:5]:
-        tied   = riv["w1"] == riv["w2"]
-        leader = riv["m1"] if riv["w1"] > riv["w2"] else riv["m2"]
-        lw, tw = max(riv["w1"], riv["w2"]), min(riv["w1"], riv["w2"])
-        verdict = f"Dead even — {riv['w1']}–{riv['w2']}" if tied else f"{leader} leads {lw}–{tw}"
-        intensity = ("🔥 Intense" if riv["avg_margin"] < 15
-                     else "⚖️ Competitive" if riv["avg_margin"] < 30 else "💪 One-sided")
-        st.markdown(
-            f'<div style="background:#1e1e2e;border:1px solid #313244;border-radius:12px;'
+    # ── True Rivals ───────────────────────────────────────────────────────────
+    st.markdown('<div class="sec-hdr">🔥 True Rivals</div>', unsafe_allow_html=True)
+    st.caption("Ranked by: closeness of series record × tightness of average margin × playoff encounters")
+
+    def _rival_card(riv, accent):
+        tied    = riv["w1"] == riv["w2"]
+        leader  = riv["m1"] if riv["w1"] > riv["w2"] else riv["m2"]
+        lw, tw  = max(riv["w1"], riv["w2"]), min(riv["w1"], riv["w2"])
+        verdict = (f"Dead even — {riv['w1']}–{riv['w2']}" if tied
+                   else f"{leader} leads {lw}–{tw}")
+        po_str  = f" · {riv['po']} playoff meeting{'s' if riv['po'] != 1 else ''}" if riv["po"] else ""
+        return (
+            f'<div style="background:#1e1e2e;border:1px solid {accent};border-radius:12px;'
             f'padding:16px 20px;margin-bottom:10px">'
             f'<div style="display:flex;justify-content:space-between;align-items:center">'
             f'<span style="font-size:1.1rem;font-weight:700;color:#cdd6f4">'
             f'{riv["m1"]} <span style="color:#6c7086">vs</span> {riv["m2"]}</span>'
-            f'<span style="color:#f9e2af;font-size:.85rem">{intensity}</span></div>'
-            f'<div style="color:#89b4fa;font-weight:700;font-size:1.4rem;margin-top:6px">'
+            + (f'<span style="color:#f9e2af;font-size:.8rem">🏆 Playoff history</span>' if riv["po"] else '')
+            + f'</div>'
+            f'<div style="color:{accent};font-weight:700;font-size:1.4rem;margin-top:6px">'
             f'{riv["w1"]}–{riv["w2"]}</div>'
             f'<div style="color:#a6adc8;font-size:.8rem;margin-top:4px">'
-            f'{verdict} · {riv["total"]} games played · avg margin {riv["avg_margin"]} pts</div>'
+            f'{verdict} · avg margin {riv["avg_margin"]} pts{po_str}</div>'
+            f'</div>'
+        )
+
+    top_rivals = sorted(scored, key=lambda x: x["riv_score"], reverse=True)
+    for riv in top_rivals[:5]:
+        st.markdown(_rival_card(riv, "#89b4fa"), unsafe_allow_html=True)
+
+    # ── Most One-Sided ────────────────────────────────────────────────────────
+    st.markdown('<div class="sec-hdr">💪 Most One-Sided</div>', unsafe_allow_html=True)
+    st.caption("Ranked by: record imbalance × average margin — these matchups are just unfair")
+
+    top_onesided = sorted(scored, key=lambda x: x["one_score"], reverse=True)
+    for riv in top_onesided[:3]:
+        dominant = riv["m1"] if riv["w1"] > riv["w2"] else riv["m2"]
+        victim   = riv["m2"] if dominant == riv["m1"] else riv["m1"]
+        dw       = max(riv["w1"], riv["w2"])
+        vw       = min(riv["w1"], riv["w2"])
+        st.markdown(
+            f'<div style="background:#1e1e2e;border:1px solid #f38ba8;border-radius:12px;'
+            f'padding:16px 20px;margin-bottom:10px">'
+            f'<div style="font-size:1.1rem;font-weight:700;color:#cdd6f4">'
+            f'{dominant} <span style="color:#a6e3a1">owns</span> {victim}</div>'
+            f'<div style="color:#f38ba8;font-weight:700;font-size:1.4rem;margin-top:6px">'
+            f'{dw}–{vw}</div>'
+            f'<div style="color:#a6adc8;font-size:.8rem;margin-top:4px">'
+            f'avg margin {riv["avg_margin"]} pts · {victim} just can\'t figure it out</div>'
             f'</div>',
             unsafe_allow_html=True
         )
@@ -1471,7 +1577,7 @@ def page_rivalries(seasons):
     if not all_games:
         return
 
-    st.markdown('<div class="sec-hdr">📋 All-Time Records</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-hdr">📋 All-Time Game Records</div>', unsafe_allow_html=True)
 
     blowout  = max(all_games, key=lambda g: g["margin"])
     closest  = min(all_games, key=lambda g: g["margin"])
@@ -1479,20 +1585,21 @@ def page_rivalries(seasons):
     hi_comb  = max(all_games, key=lambda g: g["pa"] + g["pb"])
 
     def rec_card(title, g, detail):
+        po_badge = " 🏆" if g.get("playoff") else ""
         return (
             f'<div class="metric-card" style="text-align:left">'
             f'<div class="label">{title}</div>'
             f'<div class="value" style="font-size:.9rem">'
             f'{g["ma"]} {g["pa"]:.1f} – {g["pb"]:.1f} {g["mb"]}</div>'
-            f'<div class="sub">{g["season"]} Wk {g["week"]} · {detail}</div></div>'
+            f'<div class="sub">{g["season"]} Wk {g["week"]}{po_badge} · {detail}</div></div>'
         )
 
     rc1, rc2 = st.columns(2)
-    rc1.markdown(rec_card("Biggest Blowout",     blowout,  f'Margin: {blowout["margin"]:.1f}'),  unsafe_allow_html=True)
-    rc2.markdown(rec_card("Closest Game",        closest,  f'Margin: {closest["margin"]:.2f}'),  unsafe_allow_html=True)
+    rc1.markdown(rec_card("Biggest Blowout",      blowout,  f'Margin: {blowout["margin"]:.1f}'),              unsafe_allow_html=True)
+    rc2.markdown(rec_card("Closest Game",         closest,  f'Margin: {closest["margin"]:.2f}'),              unsafe_allow_html=True)
     rc3, rc4 = st.columns(2)
-    rc3.markdown(rec_card("Highest Single Score",hi_score, f'Score: {max(hi_score["pa"],hi_score["pb"]):.1f}'), unsafe_allow_html=True)
-    rc4.markdown(rec_card("Highest Combined",    hi_comb,  f'Total: {hi_comb["pa"]+hi_comb["pb"]:.1f}'),       unsafe_allow_html=True)
+    rc3.markdown(rec_card("Highest Single Score", hi_score, f'Score: {max(hi_score["pa"],hi_score["pb"]):.1f}'), unsafe_allow_html=True)
+    rc4.markdown(rec_card("Highest Combined",     hi_comb,  f'Total: {hi_comb["pa"]+hi_comb["pb"]:.1f}'),     unsafe_allow_html=True)
 
 # ─── Page: Wiki ───────────────────────────────────────────────────────────────
 
