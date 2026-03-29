@@ -670,31 +670,31 @@ def page_schedule(seasons, players):
             max_round = max(rounds)
 
             for rnd in rounds:
-                matches    = [m for m in bracket if m["r"] == rnd]
-                wk_start   = pw + (rnd - 1) * weeks_per_round
-                wk_end     = wk_start + weeks_per_round - 1
-                is_champ   = is_winners and rnd == max_round
-                is_third   = (not is_winners) and rnd == max_round
+                matches      = [m for m in bracket if m["r"] == rnd]
+                wk_start     = pw + (rnd - 1) * weeks_per_round
+                wk_end       = wk_start + weeks_per_round - 1
+                is_final_rnd = rnd == max_round
 
-                if is_champ:
-                    label = "🏆 Championship Game"
-                elif is_third:
-                    label = "🥉 3rd Place Game"
-                elif is_winners and rnd == max_round - 1:
-                    label = "Semifinals"
-                elif is_winners:
-                    label = "Quarterfinals"
-                elif rnd == max_round - 1:
-                    label = "Consolation Semifinals"
+                if is_winners:
+                    if is_final_rnd:
+                        label = "Finals"
+                    elif rnd == max_round - 1:
+                        label = "Semifinals"
+                    else:
+                        label = "Quarterfinals"
                 else:
-                    label = f"Round {rnd}"
+                    if is_final_rnd:
+                        label = "Final"
+                    elif rnd == max_round - 1:
+                        label = "Semifinals"
+                    else:
+                        label = f"Round {rnd}"
 
                 wk_label = (f"Weeks {wk_start}–{wk_end}"
                             if weeks_per_round > 1 else f"Week {wk_start}")
-                border_color = "#f9e2af" if is_champ else ("#cd7f32" if is_third else "#313244")
+                rnd_color = "#f9e2af" if (is_winners and is_final_rnd) else "#cdd6f4"
                 st.markdown(
-                    f'<div style="color:{"#f9e2af" if is_champ else "#cdd6f4"};'
-                    f'font-size:{"1.15rem" if is_champ else "1rem"};font-weight:700;'
+                    f'<div style="color:{rnd_color};font-size:1rem;font-weight:700;'
                     f'margin:16px 0 8px 0">{label} — {wk_label}</div>',
                     unsafe_allow_html=True
                 )
@@ -707,6 +707,15 @@ def page_schedule(seasons, players):
                     t1     = teams.get(t1_id, {})
                     t2     = teams.get(t2_id, {})
 
+                    # Detect per-match if it's the championship or 3rd place game.
+                    # In the winners bracket final round, the match whose teams come
+                    # from losers (l) of the previous round is the 3rd place game.
+                    t1_from      = match.get("t1_from") or {}
+                    t2_from      = match.get("t2_from") or {}
+                    from_losers  = "l" in t1_from or "l" in t2_from
+                    is_match_champ = is_winners and is_final_rnd and not from_losers
+                    is_match_third = is_winners and is_final_rnd and from_losers
+
                     # Sum scores across all weeks in the round
                     def team_scores(tid):
                         if tid is None:
@@ -716,18 +725,17 @@ def page_schedule(seasons, players):
                         total = sum(valid) if valid else None
                         return wk_scores, total
 
-                    wk1_s1, wk1_s2 = (score_lookup.get((t1_id, wk_start)) if t1_id else None,
-                                      score_lookup.get((t2_id, wk_start)) if t2_id else None)
                     _, total1 = team_scores(t1_id)
                     _, total2 = team_scores(t2_id)
 
                     def matchup_row(tid, team, total, wk_scores_list):
                         if tid is None:
                             return "<div style='color:#6c7086;font-size:.85rem'>TBD</div>"
-                        is_win  = tid == winner
+                        # No winner highlighting in the consolation bracket
+                        is_win  = (tid == winner) if is_winners else False
                         name    = team.get("team_name", "?")
                         mgr     = team.get("display_name", "?")
-                        trophy  = " 🏆" if is_win and is_champ else (" 🥉" if is_win and is_third else "")
+                        trophy  = " 🏆" if is_win and is_match_champ else (" 🥉" if is_win and is_match_third else "")
                         color   = "#cdd6f4" if is_win else "#888"
                         win_col = "#a6e3a1" if is_win else "#cdd6f4"
 
@@ -758,10 +766,19 @@ def page_schedule(seasons, players):
                     wk_scores1 = [score_lookup.get((t1_id, w)) for w in range(wk_start, wk_end + 1)] if t1_id else []
                     wk_scores2 = [score_lookup.get((t2_id, w)) for w in range(wk_start, wk_end + 1)] if t2_id else []
 
+                    badge_html = ""
+                    if is_match_champ:
+                        badge_html = '<div style="font-size:.7rem;color:#f9e2af;font-weight:700;margin-bottom:6px">🏆 CHAMPIONSHIP</div>'
+                    elif is_match_third:
+                        badge_html = '<div style="font-size:.7rem;color:#cd7f32;font-weight:700;margin-bottom:6px">🥉 3RD PLACE</div>'
+
+                    match_border = "#f9e2af" if is_match_champ else ("#cd7f32" if is_match_third else "#313244")
+
                     with cols[i]:
                         st.markdown(
-                            f'<div style="background:#1e1e2e;border:2px solid {border_color};'
+                            f'<div style="background:#1e1e2e;border:2px solid {match_border};'
                             f'border-radius:10px;padding:12px 16px;margin:4px 0">'
+                            f'{badge_html}'
                             f'{matchup_row(t1_id, t1, total1, wk_scores1)}'
                             f'<hr style="border-color:#313244;margin:6px 0">'
                             f'{matchup_row(t2_id, t2, total2, wk_scores2)}</div>',
@@ -771,6 +788,10 @@ def page_schedule(seasons, players):
 
         render_bracket(wb, is_winners=True)
         st.markdown("---")
+        st.markdown(
+            '<div style="color:#f38ba8;font-size:1.15rem;font-weight:700;margin:8px 0 4px 0">💩 Poop Bowl</div>',
+            unsafe_allow_html=True
+        )
         render_bracket(lb, is_winners=False)
 
 # ─── Page: Transactions ───────────────────────────────────────────────────────
