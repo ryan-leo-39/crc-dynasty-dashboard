@@ -1396,38 +1396,6 @@ def page_immaculate_grid(seasons, players):
                         unsafe_allow_html=True,
                     )
 
-    # ── Debug / Diagnostic ────────────────────────────────────────────────────
-    with st.expander("🔍 Roster History Lookup (debug)"):
-        st.caption("Use this to verify what's in the player history database.")
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.markdown("**Manager → players they've had**")
-            mgr_names = sorted({mgr for mgrs in history.values() for mgr in mgrs})
-            sel_mgr = st.selectbox("Manager", [""] + mgr_names, key="dbg_mgr")
-            if sel_mgr:
-                mgr_pids = [pid for pid, mgrs in history.items() if sel_mgr in mgrs]
-                mgr_pnames = sorted(
-                    player_info(pid, players)[0]
-                    for pid in mgr_pids
-                    if player_info(pid, players)[0] != "Unknown"
-                )
-                st.caption(f"{len(mgr_pnames)} players found")
-                st.text_area("Players", "\n".join(mgr_pnames), height=200, key="dbg_mgr_out")
-        with col_b:
-            st.markdown("**Player → managers who've had them**")
-            p_opts2 = build_player_options(players)
-            sel_dbg_pid = st.selectbox(
-                "Player",
-                p_opts2,
-                format_func=lambda pid: fmt_player(pid, players),
-                key="dbg_pid",
-            )
-            if sel_dbg_pid is not None:
-                mgrs_for_player = sorted(history.get(str(sel_dbg_pid), []))
-                st.caption(f"Found on {len(mgrs_for_player)} manager roster(s)")
-                for m in mgrs_for_player:
-                    st.write(f"• {m}")
-
     # ── Rules ─────────────────────────────────────────────────────────────────
     with st.expander("How to play"):
         st.markdown("""
@@ -2404,6 +2372,44 @@ def _tool_props(seasons):
                     _save_props(data)
                     st.rerun()
 
+# ─── Tool: Roster Lookup ─────────────────────────────────────────────────────
+
+def _tool_roster_lookup(seasons, players):
+    st.caption("Look up every player a manager has ever rostered, or see which managers have had a given player across all seasons.")
+    history = build_player_team_history(tuple(lg["league_id"] for lg in seasons))
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("**Manager → all players they've rostered**")
+        mgr_names = sorted({mgr for mgrs in history.values() for mgr in mgrs})
+        sel_mgr = st.selectbox("Manager", [""] + mgr_names, key="rl_mgr")
+        if sel_mgr:
+            mgr_pids = [pid for pid, mgrs in history.items() if sel_mgr in mgrs]
+            mgr_pnames = sorted(
+                player_info(pid, players)[0]
+                for pid in mgr_pids
+                if player_info(pid, players)[0] != "Unknown"
+            )
+            st.caption(f"{len(mgr_pnames)} players found across all seasons")
+            st.text_area("Players", "\n".join(mgr_pnames), height=300, key="rl_mgr_out")
+
+    with col_b:
+        st.markdown("**Player → managers who've had them**")
+        sel_pid = st.selectbox(
+            "Player",
+            build_player_options(players),
+            format_func=lambda pid: fmt_player(pid, players),
+            key="rl_pid",
+        )
+        if sel_pid is not None:
+            mgrs_for_player = sorted(history.get(str(sel_pid), []))
+            if mgrs_for_player:
+                st.caption(f"Rostered by {len(mgrs_for_player)} manager(s)")
+                for m in mgrs_for_player:
+                    st.markdown(f"• {m}")
+            else:
+                st.caption("No roster history found for this player.")
+
 # ─── Tool: League Voting ──────────────────────────────────────────────────────
 
 def _tool_voting(seasons):
@@ -2545,7 +2551,7 @@ def page_tools(seasons, players):
         )
 
     st.markdown("")
-    tool_tab1, tool_tab2, tool_tab3 = st.tabs(["🎰 Draft Lottery", "🗳️ League Voting", "🎯 Season Props"])
+    tool_tab1, tool_tab2, tool_tab3, tool_tab4 = st.tabs(["🎰 Draft Lottery", "🗳️ League Voting", "🎯 Season Props", "🔍 Roster Lookup"])
 
     with tool_tab1:
         _tool_lottery(seasons)
@@ -2555,6 +2561,9 @@ def page_tools(seasons, players):
 
     with tool_tab3:
         _tool_props(seasons)
+
+    with tool_tab4:
+        _tool_roster_lookup(seasons, players)
 
 # ─── Combined page wrappers ───────────────────────────────────────────────────
 
