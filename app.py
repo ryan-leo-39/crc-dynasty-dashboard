@@ -533,9 +533,12 @@ def page_home(seasons, players):
         fig2  = px.line(pivot.reset_index().melt(id_vars="Season",var_name="Manager",value_name="PF"),
                         x="Season", y="PF", color="Manager",
                         title="Points For by Season", markers=True)
+        _season_vals = sorted(pivot.index.tolist())
         fig2.update_layout(height=320, margin=dict(l=0,r=0,t=40,b=0),
                            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                            font_color="#cdd6f4")
+        fig2.update_xaxes(tickmode="array", tickvals=_season_vals,
+                          ticktext=[str(v) for v in _season_vals])
         st.plotly_chart(fig2, use_container_width=True)
 
 # ─── Page: Standings ──────────────────────────────────────────────────────────
