@@ -427,6 +427,7 @@ def page_home(seasons, players):
       * {{box-sizing:border-box;margin:0;padding:0}}
       body {{background:transparent;font-family:'Inter',sans-serif}}
       .row {{display:flex;gap:10px;padding:2px 0}}
+      .wrap {{padding-bottom:12px}}
       .card {{
         flex:1;background:#1e1e2e;border:1px solid #313244;border-radius:10px;
         padding:10px 12px;cursor:pointer;text-align:center;
@@ -439,6 +440,7 @@ def page_home(seasons, players):
       .lbl {{font-size:.72rem;color:#a6adc8;font-weight:600;margin:2px 0 1px;font-family:'Inter',sans-serif}}
       .val {{font-size:.95rem;font-weight:700;color:#cdd6f4;font-family:'Inter',sans-serif}}
     </style>
+    <div class="wrap">
     <div class="row">
       <div class="card" onclick="go('League Office','Tools','Season Props')">
         <div class="ico">🎯</div>
@@ -473,6 +475,7 @@ def page_home(seasons, players):
         <div class="val">Rules & info</div>
       </div>
     </div>
+    </div>
     <script>
     function go(top, sub1, sub2) {{
       function clickTab(text) {{
@@ -489,7 +492,7 @@ def page_home(seasons, players):
       }}, 250);
     }}
     </script>
-    """, height=200, scrolling=False)
+    """, height=215, scrolling=False)
 
     r1c1, r1c2 = st.columns(2)
     r2c1, r2c2 = st.columns(2)
@@ -2432,6 +2435,7 @@ def _tool_roster_lookup(seasons, players):
 # ─── Tool: League Voting ──────────────────────────────────────────────────────
 
 def _tool_voting(seasons):
+    st.caption("Propose and vote on rule changes, settings, or anything else. A proposal passes with a majority of manager votes.")
     current_lid   = seasons[0]["league_id"]
     teams         = build_team_map(get_users(current_lid), get_rosters(current_lid))
     manager_names = sorted(t["display_name"] for t in teams.values())
