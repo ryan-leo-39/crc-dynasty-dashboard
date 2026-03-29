@@ -2230,6 +2230,44 @@ def _tool_props(seasons):
 
     # ── Manage tab ────────────────────────────────────────────────────────────
     with tab_mgmt:
+        st.markdown("#### Load Default Props")
+        def_season = st.selectbox("Season", season_opts, key="props_def_season")
+        existing_qs = {p["question"] for p in data["props"] if p["season"] == def_season}
+
+        DEFAULT_PROPS = [
+            ("Who will win the championship?",              mgr_names),
+            ("Who will finish last place (Poop Bowl)?",     mgr_names),
+            ("Who will have the best regular season record?", mgr_names),
+            ("Who will score the most total points?",       mgr_names),
+            ("Who will score the fewest total points?",     mgr_names),
+            ("Who will have the highest single-week score?",mgr_names),
+            ("Who will make the most transactions?",        mgr_names),
+            ("Who will be the most active on the waiver wire?", mgr_names),
+            ("Will the defending champion repeat?",         ["Yes", "No"]),
+            ("Who will make the steal of the draft?",       mgr_names),
+        ]
+
+        to_load = [(q, opts) for q, opts in DEFAULT_PROPS if q not in existing_qs]
+        if not to_load:
+            st.success("All default props already loaded for this season.")
+        else:
+            st.caption(f"{len(to_load)} of {len(DEFAULT_PROPS)} default props not yet added.")
+            if st.button(f"➕ Load {len(to_load)} Default Props", key="load_defaults"):
+                for q, opts in to_load:
+                    data["props"].append({
+                        "id":       str(uuid.uuid4())[:8],
+                        "season":   def_season,
+                        "question": q,
+                        "options":  opts,
+                        "status":   "open",
+                        "correct":  None,
+                        "picks":    {},
+                    })
+                _save_props(data)
+                st.success(f"Loaded {len(to_load)} props for {def_season}!")
+                st.rerun()
+
+        st.markdown("---")
         st.markdown("#### Create New Prop")
         with st.form("new_prop_form"):
             p_season  = st.selectbox("Season", season_opts, key="props_season_mgmt")
