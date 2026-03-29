@@ -2590,7 +2590,7 @@ def main():
         btn.innerHTML = '🏠';
         btn.title = 'Go to Home';
         btn.style.cssText = [
-          'position:fixed','top:10px','right:72px','z-index:999999',
+          'position:fixed','top:10px','left:12px','z-index:999999',
           'cursor:pointer','font-size:1.35rem','line-height:1',
           'background:#1e1e2e','border:1px solid #313244',
           'border-radius:8px','padding:5px 8px',
