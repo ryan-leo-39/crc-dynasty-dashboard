@@ -2593,11 +2593,12 @@ def main():
           'position:fixed','top:16px','left:14px','z-index:999999',
           'cursor:pointer','font-size:1.2rem','line-height:1',
           'background:none','border:none','padding:2px 4px',
-          'filter:grayscale(1) brightness(1.8)',
-          'opacity:0.75','transition:opacity .15s','user-select:none'
+          'opacity:0.85','transition:opacity .15s, transform .1s','user-select:none'
         ].join(';');
         btn.onmouseover = function(){ btn.style.opacity='1'; };
-        btn.onmouseout  = function(){ btn.style.opacity='0.75'; };
+        btn.onmouseout  = function(){ btn.style.opacity='0.85'; btn.style.transform='scale(1)'; };
+        btn.onmousedown = function(){ btn.style.transform='scale(0.8)'; };
+        btn.onmouseup   = function(){ btn.style.transform='scale(1.15)'; setTimeout(function(){ btn.style.transform='scale(1)'; }, 150); };
         btn.onclick = function() {
           var tabs = par.querySelectorAll('button[role="tab"]');
           for (var t of tabs) {
