@@ -2533,21 +2533,7 @@ def _tool_voting(seasons):
 # ─── Page: Tools & Links ──────────────────────────────────────────────────────
 
 def page_tools(seasons, players):
-    st.title("🛠️ Tools & Links")
-
-    st.markdown('<div class="sec-hdr">🔗 Links</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    for col, name, url, desc in [
-        (c1, "Sleeper",       "https://sleeper.com",       "League management, scoring & chat"),
-        (c2, "KeepTradeCut",  "https://keeptradecut.com",  "Dynasty player values & rankings"),
-    ]:
-        col.markdown(
-            f'<div class="metric-card" style="text-align:left">'
-            f'<a href="{url}" target="_blank" style="color:#89b4fa;font-size:1.05rem;'
-            f'font-weight:700;text-decoration:none">{name} ↗</a>'
-            f'<div class="sub" style="margin-top:4px">{desc}</div></div>',
-            unsafe_allow_html=True
-        )
+    st.title("🛠️ Tools")
 
     st.markdown('<div class="sec-hdr">🧰 Tools</div>', unsafe_allow_html=True)
 
@@ -2614,11 +2600,27 @@ def page_history(seasons):
     with t1: page_stats(seasons)
     with t2: page_rivalries(seasons)
 
+def page_links():
+    st.title("🔗 Links")
+    c1, c2 = st.columns(2)
+    for col, name, url, desc in [
+        (c1, "Sleeper",      "https://sleeper.com",      "League management, scoring & chat"),
+        (c2, "KeepTradeCut", "https://keeptradecut.com", "Dynasty player values & rankings"),
+    ]:
+        col.markdown(
+            f'<div class="metric-card" style="text-align:left">'
+            f'<a href="{url}" target="_blank" style="color:#89b4fa;font-size:1.05rem;'
+            f'font-weight:700;text-decoration:none">{name} ↗</a>'
+            f'<div class="sub" style="margin-top:4px">{desc}</div></div>',
+            unsafe_allow_html=True
+        )
+
 def page_league_office(seasons, players):
     st.title("🏢 League Office")
-    t1, t2 = st.tabs(["🛠️ Tools", "📖 Wiki"])
+    t1, t2, t3 = st.tabs(["🛠️ Tools", "🔗 Links", "📖 Wiki"])
     with t1: page_tools(seasons, players)
-    with t2: page_wiki()
+    with t2: page_links()
+    with t3: page_wiki()
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
