@@ -1379,12 +1379,12 @@ def _tool_lottery(seasons):
         "Picks are drawn without replacement — most exciting reveal last."
     )
 
-    completed = [s for s in seasons if s["status"] == "complete"]
-    if not completed:
-        st.info("No completed seasons to pull standings from.")
+    all_seasons = [s for s in seasons if s["status"] in ("complete", "in_season", "post_season")]
+    if not all_seasons:
+        st.info("No seasons found.")
         return
 
-    opts = {s["season"]: s["league_id"] for s in completed}
+    opts = {s["season"]: s["league_id"] for s in all_seasons}
     sel  = st.selectbox("Season", list(opts.keys()), key="lot_season")
     lid  = opts[sel]
 
