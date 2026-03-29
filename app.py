@@ -2158,13 +2158,17 @@ def _tool_props(seasons):
                 badge_col  = {"open": "#a6e3a1", "locked": "#f9e2af", "resolved": "#89b4fa"}.get(status, "#6c7086")
                 badge_text = {"open": "🟢 Open", "locked": "🔒 Locked", "resolved": "✅ Resolved"}.get(status, status)
 
+                desc_html = (
+                    f'<div style="font-size:.78rem;color:#a6adc8;margin-top:4px">{prop["description"]}</div>'
+                    if prop.get("description") else ""
+                )
                 st.markdown(
                     f'<div style="background:#1e1e2e;border:1px solid #313244;border-radius:10px;'
                     f'padding:14px 16px;margin:8px 0">'
-                    f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+                    f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
                     f'<span style="font-weight:700;color:#cdd6f4;font-size:1rem">{prop["question"]}</span>'
                     f'<span style="font-size:.75rem;color:{badge_col};font-weight:600">{badge_text}</span>'
-                    f'</div></div>',
+                    f'</div>{desc_html}</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -2235,33 +2239,45 @@ def _tool_props(seasons):
         existing_qs = {p["question"] for p in data["props"] if p["season"] == def_season}
 
         DEFAULT_PROPS = [
-            ("Who will win the championship?",              mgr_names),
-            ("Who will finish last place (Poop Bowl)?",     mgr_names),
-            ("Who will have the best regular season record?", mgr_names),
-            ("Who will score the most total points?",       mgr_names),
-            ("Who will score the fewest total points?",     mgr_names),
-            ("Who will have the highest single-week score?",mgr_names),
-            ("Who will make the most transactions?",        mgr_names),
-            ("Who will be the most active on the waiver wire?", mgr_names),
-            ("Will the defending champion repeat?",         ["Yes", "No"]),
-            ("Who will make the steal of the draft?",       mgr_names),
+            ("Who will win the championship?",
+             mgr_names, None),
+            ("Who will finish last place (Poop Bowl)?",
+             mgr_names, None),
+            ("Who will have the best regular season record?",
+             mgr_names, None),
+            ("Who will score the most total points?",
+             mgr_names, None),
+            ("Who will score the fewest total points?",
+             mgr_names, None),
+            ("Who will have the highest single-week score?",
+             mgr_names, None),
+            ("Who will make the most transactions?",
+             mgr_names, None),
+            ("Who will be the most active on the waiver wire?",
+             mgr_names, None),
+            ("Will the defending champion repeat?",
+             ["Yes", "No"], None),
+            ("Who will make the steal of the draft?",
+             mgr_names,
+             "Awarded to the manager whose drafted player finished highest relative to their ADP — biggest outperformer vs draft position wins."),
         ]
 
-        to_load = [(q, opts) for q, opts in DEFAULT_PROPS if q not in existing_qs]
+        to_load = [(q, opts, desc) for q, opts, desc in DEFAULT_PROPS if q not in existing_qs]
         if not to_load:
             st.success("All default props already loaded for this season.")
         else:
             st.caption(f"{len(to_load)} of {len(DEFAULT_PROPS)} default props not yet added.")
             if st.button(f"➕ Load {len(to_load)} Default Props", key="load_defaults"):
-                for q, opts in to_load:
+                for q, opts, desc in to_load:
                     data["props"].append({
-                        "id":       str(uuid.uuid4())[:8],
-                        "season":   def_season,
-                        "question": q,
-                        "options":  opts,
-                        "status":   "open",
-                        "correct":  None,
-                        "picks":    {},
+                        "id":          str(uuid.uuid4())[:8],
+                        "season":      def_season,
+                        "question":    q,
+                        "description": desc,
+                        "options":     opts,
+                        "status":      "open",
+                        "correct":     None,
+                        "picks":       {},
                     })
                 _save_props(data)
                 st.success(f"Loaded {len(to_load)} props for {def_season}!")
@@ -2270,20 +2286,22 @@ def _tool_props(seasons):
         st.markdown("---")
         st.markdown("#### Create New Prop")
         with st.form("new_prop_form"):
-            p_season  = st.selectbox("Season", season_opts, key="props_season_mgmt")
+            p_season   = st.selectbox("Season", season_opts, key="props_season_mgmt")
             p_question = st.text_input("Question", placeholder="Who wins the 2025 championship?")
+            p_desc     = st.text_input("Description (optional)", placeholder="e.g. How winning is determined")
             p_opts_raw = st.text_area("Options (one per line)", placeholder="Manager A\nManager B\nManager C")
             if st.form_submit_button("➕ Add Prop"):
                 opts_list = [o.strip() for o in p_opts_raw.strip().splitlines() if o.strip()]
                 if p_question.strip() and len(opts_list) >= 2:
                     data["props"].append({
-                        "id":       str(uuid.uuid4())[:8],
-                        "season":   p_season,
-                        "question": p_question.strip(),
-                        "options":  opts_list,
-                        "status":   "open",
-                        "correct":  None,
-                        "picks":    {},
+                        "id":          str(uuid.uuid4())[:8],
+                        "season":      p_season,
+                        "question":    p_question.strip(),
+                        "description": p_desc.strip() or None,
+                        "options":     opts_list,
+                        "status":      "open",
+                        "correct":     None,
+                        "picks":       {},
                     })
                     _save_props(data)
                     st.success("Prop added!")
