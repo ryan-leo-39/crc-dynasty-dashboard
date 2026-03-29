@@ -6,6 +6,7 @@ import json
 import random
 import uuid
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import pandas as pd
 import plotly.express as px
@@ -408,41 +409,55 @@ def page_home(seasons, players):
             <span style="color:#a6adc8"> — {champ['display_name']}</span>
             </div>""", unsafe_allow_html=True)
 
-    # ── Quick Access strip ────────────────────────────────────────────────────
+    # ── Quick Access strip (clickable, navigates to tab) ─────────────────────
     _props_data   = _load_props()
     _votes_data   = _load_votes()
     _cur_season   = current["season"]
     _open_props   = sum(1 for p in _props_data["props"] if p["season"] == _cur_season and p["status"] == "open")
     _active_votes = sum(1 for p in _votes_data["proposals"] if p.get("status") == "open")
+    _grid_date    = _today().strftime("%b %d")
 
-    qa_cols = st.columns(4)
-    for col, ico, lbl, val, hint in [
-        (qa_cols[0], "🎯", "Season Props",    f"{_open_props} open",     "League Office → Tools → Season Props"),
-        (qa_cols[1], "🗳️", "League Voting",   f"{_active_votes} active", "League Office → Tools → League Voting"),
-        (qa_cols[2], "🎰", "Draft Lottery",   f"{_cur_season} Draft",    "League Office → Tools → Draft Lottery"),
-        (qa_cols[3], "🎮", "Daily Grid",      _today().strftime("%b %d"), "Grid tab — resets at midnight ET"),
-    ]:
-        col.markdown(
-            f'<div class="metric-card" style="text-align:center">'
-            f'<div style="font-size:1.4rem">{ico}</div>'
-            f'<div class="label">{lbl}</div>'
-            f'<div class="value" style="font-size:1.1rem">{val}</div>'
-            f'<div class="sub">{hint}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("")
-
-    # ── Season Props (inline picks) ───────────────────────────────────────────
-    with st.expander(f"🎯 Season Props — {_cur_season}", expanded=(_open_props > 0)):
-        _mgr_names = sorted({
-            t["display_name"]
-            for s in seasons
-            for t in build_team_map(get_users(s["league_id"]), get_rosters(s["league_id"])).values()
-        })
-        _season_props = [p for p in _props_data["props"] if p["season"] == _cur_season]
-        _render_props_picks(_season_props, _mgr_names, _props_data, key_prefix="home")
+    components.html(f"""
+    <style>
+      body {{margin:0;background:transparent}}
+      .row {{display:flex;gap:10px;padding:2px 0}}
+      .card {{
+        flex:1;background:#1e1e2e;border:1px solid #313244;border-radius:10px;
+        padding:10px 12px;cursor:pointer;text-align:center;
+        transition:border-color .15s,transform .1s;user-select:none
+      }}
+      .card:hover {{border-color:#89b4fa;transform:translateY(-2px)}}
+      .card:active {{transform:translateY(0)}}
+      .ico  {{font-size:1.3rem;line-height:1.4}}
+      .lbl  {{font-size:.72rem;color:#a6adc8;font-weight:600;margin:2px 0 1px}}
+      .val  {{font-size:.95rem;font-weight:700;color:#cdd6f4}}
+    </style>
+    <div class="row">
+      <div class="card" onclick="go('League Office')">
+        <div class="ico">🎯</div>
+        <div class="lbl">Season Props</div>
+        <div class="val">{_open_props} open</div>
+      </div>
+      <div class="card" onclick="go('League Office')">
+        <div class="ico">🗳️</div>
+        <div class="lbl">League Voting</div>
+        <div class="val">{_active_votes} active</div>
+      </div>
+      <div class="card" onclick="go('Grid')">
+        <div class="ico">🎮</div>
+        <div class="lbl">Daily Grid</div>
+        <div class="val">{_grid_date}</div>
+      </div>
+    </div>
+    <script>
+    function go(name) {{
+      var tabs = window.parent.document.querySelectorAll('button[role="tab"]');
+      for (var t of tabs) {{
+        if (t.innerText.includes(name)) {{ t.click(); break; }}
+      }}
+    }}
+    </script>
+    """, height=90, scrolling=False)
 
     r1c1, r1c2 = st.columns(2)
     r2c1, r2c2 = st.columns(2)
