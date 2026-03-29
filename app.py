@@ -936,77 +936,109 @@ def page_trade_analyzer(seasons, players):
     last_week  = lg_info["settings"].get("last_scored_leg", 17)
     player_pts = get_player_season_pts(lid, last_week)
 
-    tnames  = {rid: f"{t['team_name']} ({t['display_name']})" for rid, t in teams.items()}
-    t_ids   = list(tnames.keys())
+    tab_lookup, tab_trade = st.tabs(["🔍 Player Lookup", "⚖️ Trade Builder"])
 
-    col1, col2 = st.columns(2)
-    with col1:
-        rid1 = st.selectbox("Team 1", t_ids, key="trade_t1",
-                            format_func=lambda x: tnames[x])
-    with col2:
-        other = [x for x in t_ids if x != rid1]
-        rid2  = st.selectbox("Team 2", other, key="trade_t2",
-                             format_func=lambda x: tnames[x])
+    # ── Player Lookup ─────────────────────────────────────────────────────────
+    with tab_lookup:
+        st.caption("Search any NFL player to see their dynasty value based on the selected season.")
+        search = st.text_input("Player name", placeholder="e.g. Justin Jefferson", key="player_lookup_search")
 
-    r1_pids = teams[rid1]["roster"].get("players") or []
-    r2_pids = teams[rid2]["roster"].get("players") or []
+        if search.strip():
+            term = search.strip().lower()
+            matches = [
+                (pid, p) for pid, p in players.items()
+                if term in f"{p.get('first_name','')} {p.get('last_name','')}".lower()
+                and p.get("fantasy_positions")
+            ]
+            matches = sorted(matches, key=lambda x: x[1].get("search_rank") or 9999)[:20]
 
-    def pid_label(pid):
-        name, pos, nfl, age = player_info(pid, players)
-        dv = dynasty_value(pid, players, player_pts)
-        return f"{name} ({pos}, {nfl}, Age {age}) — Val {dv}"
-
-    st.markdown('<div class="sec-hdr">Build the Trade</div>', unsafe_allow_html=True)
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown(f"**{teams[rid1]['team_name']} sends:**")
-        sends1 = st.multiselect("Players from Team 1", r1_pids, key="trade_sends1",
-                                format_func=lambda x: pid_label(x))
-    with col2:
-        st.markdown(f"**{teams[rid2]['team_name']} sends:**")
-        sends2 = st.multiselect("Players from Team 2", r2_pids, key="trade_sends2",
-                                format_func=lambda x: pid_label(x))
-
-    if not sends1 and not sends2:
-        st.info("Select players above to analyze the trade.")
-        return
-
-    # Compute values
-    val1_sending = sum(dynasty_value(p, players, player_pts) for p in sends1)
-    val2_sending = sum(dynasty_value(p, players, player_pts) for p in sends2)
-    diff         = val2_sending - val1_sending  # positive = Team 1 wins
-
-    c1, c2, c3 = st.columns(3)
-    c1.markdown(f"""<div class="metric-card">
-    <div class="label">{teams[rid1]['team_name']} sends</div>
-    <div class="value">{val1_sending:.1f}</div></div>""", unsafe_allow_html=True)
-    c2.markdown(f"""<div class="metric-card">
-    <div class="label">{teams[rid2]['team_name']} sends</div>
-    <div class="value">{val2_sending:.1f}</div></div>""", unsafe_allow_html=True)
-    diff_color = "#a6e3a1" if abs(diff) < 10 else ("#f38ba8" if diff < 0 else "#89b4fa")
-    winner     = "Fair trade ✓" if abs(diff)<10 else (
-                 f"{teams[rid1]['team_name']} wins ↑" if diff>0 else
-                 f"{teams[rid2]['team_name']} wins ↑")
-    c3.markdown(f"""<div class="metric-card">
-    <div class="label">Verdict</div>
-    <div class="value" style="color:{diff_color};font-size:1.1rem">{winner}</div>
-    <div class="sub">Diff: {abs(diff):.1f} pts</div></div>""", unsafe_allow_html=True)
-
-    # Side-by-side player breakdown
-    st.markdown('<div class="sec-hdr">Player Breakdown</div>', unsafe_allow_html=True)
-    col1, col2 = st.columns(2)
-    for col, sends, rid in [(col1, sends1, rid1), (col2, sends2, rid2)]:
-        with col:
-            st.markdown(f"**{teams[rid]['team_name']}** sending:")
-            if sends:
+            if matches:
                 rows = []
-                for pid in sends:
-                    name, pos, nfl, age = player_info(pid, players)
-                    rows.append({"Player":name,"Pos":pos,"NFL":nfl,
-                                 "Age":age,"DynVal":dynasty_value(pid,players,player_pts)})
+                for pid, p in matches:
+                    name = f"{p.get('first_name','')} {p.get('last_name','')}".strip()
+                    pos  = (p.get("fantasy_positions") or [p.get("position","?")])[0]
+                    team = p.get("team") or "FA"
+                    age  = p.get("age") or "?"
+                    dv   = dynasty_value(pid, players, player_pts)
+                    rows.append({"Player": name, "Pos": pos, "NFL Team": team,
+                                 "Age": age, "Dynasty Value": dv})
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
             else:
-                st.caption("Nothing selected")
+                st.caption("No players found.")
+        else:
+            st.info("Start typing a player's name above.")
+
+    # ── Trade Builder ─────────────────────────────────────────────────────────
+    with tab_trade:
+        tnames = {rid: f"{t['team_name']} ({t['display_name']})" for rid, t in teams.items()}
+        t_ids  = list(tnames.keys())
+
+        col1, col2 = st.columns(2)
+        with col1:
+            rid1 = st.selectbox("Team 1", t_ids, key="trade_t1",
+                                format_func=lambda x: tnames[x])
+        with col2:
+            other = [x for x in t_ids if x != rid1]
+            rid2  = st.selectbox("Team 2", other, key="trade_t2",
+                                 format_func=lambda x: tnames[x])
+
+        r1_pids = teams[rid1]["roster"].get("players") or []
+        r2_pids = teams[rid2]["roster"].get("players") or []
+
+        def pid_label(pid):
+            name, pos, nfl, age = player_info(pid, players)
+            dv = dynasty_value(pid, players, player_pts)
+            return f"{name} ({pos}, {nfl}, Age {age}) — Val {dv}"
+
+        st.markdown('<div class="sec-hdr">Build the Trade</div>', unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f"**{teams[rid1]['team_name']} sends:**")
+            sends1 = st.multiselect("Players from Team 1", r1_pids, key="trade_sends1",
+                                    format_func=lambda x: pid_label(x))
+        with col2:
+            st.markdown(f"**{teams[rid2]['team_name']} sends:**")
+            sends2 = st.multiselect("Players from Team 2", r2_pids, key="trade_sends2",
+                                    format_func=lambda x: pid_label(x))
+
+        if not sends1 and not sends2:
+            st.info("Select players above to analyze the trade.")
+            return
+
+        val1_sending = sum(dynasty_value(p, players, player_pts) for p in sends1)
+        val2_sending = sum(dynasty_value(p, players, player_pts) for p in sends2)
+        diff         = val2_sending - val1_sending
+
+        c1, c2, c3 = st.columns(3)
+        c1.markdown(f"""<div class="metric-card">
+        <div class="label">{teams[rid1]['team_name']} sends</div>
+        <div class="value">{val1_sending:.1f}</div></div>""", unsafe_allow_html=True)
+        c2.markdown(f"""<div class="metric-card">
+        <div class="label">{teams[rid2]['team_name']} sends</div>
+        <div class="value">{val2_sending:.1f}</div></div>""", unsafe_allow_html=True)
+        diff_color = "#a6e3a1" if abs(diff) < 10 else ("#f38ba8" if diff < 0 else "#89b4fa")
+        winner     = "Fair trade ✓" if abs(diff) < 10 else (
+                     f"{teams[rid1]['team_name']} wins ↑" if diff > 0 else
+                     f"{teams[rid2]['team_name']} wins ↑")
+        c3.markdown(f"""<div class="metric-card">
+        <div class="label">Verdict</div>
+        <div class="value" style="color:{diff_color};font-size:1.1rem">{winner}</div>
+        <div class="sub">Diff: {abs(diff):.1f} pts</div></div>""", unsafe_allow_html=True)
+
+        st.markdown('<div class="sec-hdr">Player Breakdown</div>', unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
+        for col, sends, rid in [(col1, sends1, rid1), (col2, sends2, rid2)]:
+            with col:
+                st.markdown(f"**{teams[rid]['team_name']}** sending:")
+                if sends:
+                    rows = []
+                    for pid in sends:
+                        name, pos, nfl, age = player_info(pid, players)
+                        rows.append({"Player": name, "Pos": pos, "NFL": nfl,
+                                     "Age": age, "DynVal": dynasty_value(pid, players, player_pts)})
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                else:
+                    st.caption("Nothing selected")
 
 # ─── Page: Immaculate Grid ────────────────────────────────────────────────────
 
@@ -2079,6 +2111,26 @@ def page_tools(seasons, players):
     with tool_tab2:
         _tool_voting(seasons)
 
+# ─── Combined page wrappers ───────────────────────────────────────────────────
+
+def page_activity(seasons, players):
+    st.title("📋 Activity")
+    t1, t2 = st.tabs(["💱 Transactions", "📜 Draft Grades"])
+    with t1: page_transactions(seasons, players)
+    with t2: page_draft_grades(seasons, players)
+
+def page_history(seasons):
+    st.title("📜 History")
+    t1, t2 = st.tabs(["📈 All-Time Stats", "⚔️ Rivalries"])
+    with t1: page_stats(seasons)
+    with t2: page_rivalries(seasons)
+
+def page_league_office(seasons, players):
+    st.title("🏢 League Office")
+    t1, t2 = st.tabs(["🛠️ Tools", "📖 Wiki"])
+    with t1: page_tools(seasons, players)
+    with t2: page_wiki()
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -2088,21 +2140,18 @@ def main():
 
     tabs = st.tabs([
         "🏠 Home", "📊 Standings", "🏟️ Teams", "📅 Schedule",
-        "💱 Transactions", "📜 Drafts", "💰 Values",
-        "🎮 Grid", "🛠️ Tools", "📈 Stats", "⚔️ Rivalries", "📖 Wiki",
+        "📋 Activity", "💰 Trade Analyzer", "🎮 Grid",
+        "📜 History", "🏢 League Office",
     ])
-    with tabs[0]:  page_home(seasons, players)
-    with tabs[1]:  page_standings(seasons, players)
-    with tabs[2]:  page_teams(seasons, players)
-    with tabs[3]:  page_schedule(seasons, players)
-    with tabs[4]:  page_transactions(seasons, players)
-    with tabs[5]:  page_draft_grades(seasons, players)
-    with tabs[6]:  page_trade_analyzer(seasons, players)
-    with tabs[7]:  page_immaculate_grid(seasons, players)
-    with tabs[8]:  page_tools(seasons, players)
-    with tabs[9]:  page_stats(seasons)
-    with tabs[10]: page_rivalries(seasons)
-    with tabs[11]: page_wiki()
+    with tabs[0]: page_home(seasons, players)
+    with tabs[1]: page_standings(seasons, players)
+    with tabs[2]: page_teams(seasons, players)
+    with tabs[3]: page_schedule(seasons, players)
+    with tabs[4]: page_activity(seasons, players)
+    with tabs[5]: page_trade_analyzer(seasons, players)
+    with tabs[6]: page_immaculate_grid(seasons, players)
+    with tabs[7]: page_history(seasons)
+    with tabs[8]: page_league_office(seasons, players)
 
 if __name__ == "__main__":
     main()
