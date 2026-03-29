@@ -1182,136 +1182,317 @@ at any point in league history (any season since 2023).
 - The puzzle is the same for everyone and resets every night at midnight
         """)
 
-# ─── Page: League Stats ───────────────────────────────────────────────────────
+# ─── All-time data engine ─────────────────────────────────────────────────────
 
-GSHEET_CSV = (
-    "https://docs.google.com/spreadsheets/d/"
-    "1u05ZjYbM-Hj46bnAh9R9aF7QHXQtKNR_YADQhhVnI1M/export?format=csv"
-)
+@st.cache_data(ttl=600, show_spinner=False)
+def build_all_time_data(league_ids_tuple):
+    """
+    Crunches all completed seasons from the Sleeper API.
+    Returns:
+      mgr_stats : dict[display_name → stat dict]
+      h2h       : dict[(mgr_a, mgr_b) sorted tuple → {wins, games}]
+    """
+    mgr_stats: dict = {}
+    h2h:       dict = {}
 
-@st.cache_data(ttl=3600, show_spinner="Loading league stats…")
-def fetch_gsheet():
-    return pd.read_csv(GSHEET_CSV)
+    def _blank():
+        return dict(seasons=0, w=0, l=0, pf=0.0, pa=0.0,
+                    champs=0, first_seed=0, last_place=0,
+                    wk_high=0, wk_low=0)
 
-def page_league_stats():
-    st.title("📈 League Stats")
-    st.caption("Data pulled automatically from the CRC Dynasty Google Sheet · refreshes every hour.")
+    for lid in league_ids_tuple:
+        try:
+            lg     = get_league(lid)
+            if lg.get("status") not in ("complete", "in_season", "post_season"):
+                continue
+            season = lg["season"]
+            pw     = lg["settings"].get("playoff_week_start", 14)
 
-    try:
-        df = fetch_gsheet()
-    except Exception as e:
-        st.error(f"Could not load the Google Sheet: {e}")
+            rosters    = get_rosters(lid)
+            teams      = build_team_map(get_users(lid), rosters)
+            rid_to_mgr = {rid: t["display_name"] for rid, t in teams.items()}
+
+            for mgr in rid_to_mgr.values():
+                mgr_stats.setdefault(mgr, _blank())
+
+            # Season totals from roster settings
+            for r in rosters:
+                mgr = rid_to_mgr.get(r["roster_id"])
+                if not mgr:
+                    continue
+                s = r["settings"]
+                mgr_stats[mgr]["seasons"] += 1
+                mgr_stats[mgr]["w"]       += s.get("wins", 0)
+                mgr_stats[mgr]["l"]       += s.get("losses", 0)
+                mgr_stats[mgr]["pf"]      += fpts(s)
+                mgr_stats[mgr]["pa"]      += fpts(s, "fpts_against")
+
+            # #1 seed (best record) and last place (worst record)
+            sorted_r = sorted(
+                rosters,
+                key=lambda r: (r["settings"].get("wins", 0), fpts(r["settings"]))
+            )
+            for attr, r in [("last_place", sorted_r[0]), ("first_seed", sorted_r[-1])]:
+                mgr = rid_to_mgr.get(r["roster_id"])
+                if mgr and mgr in mgr_stats:
+                    mgr_stats[mgr][attr] += 1
+
+            # Champion
+            wrid = str(lg.get("metadata", {}).get("latest_league_winner_roster_id") or "")
+            for r in rosters:
+                if str(r["roster_id"]) == wrid:
+                    mgr = rid_to_mgr.get(r["roster_id"])
+                    if mgr and mgr in mgr_stats:
+                        mgr_stats[mgr]["champs"] += 1
+
+            # Weekly matchups → H2H records + weekly high/low scorer
+            for w in range(1, pw):
+                try:
+                    matchups = get_matchups(lid, w)
+                    scored   = [
+                        (rid_to_mgr[m["roster_id"]], m.get("points") or 0)
+                        for m in matchups if rid_to_mgr.get(m["roster_id"])
+                    ]
+                    if scored:
+                        hi = max(p for _, p in scored)
+                        lo = min(p for _, p in scored)
+                        for mgr, pts in scored:
+                            if mgr in mgr_stats:
+                                if pts >= hi: mgr_stats[mgr]["wk_high"] += 1
+                                if pts <= lo: mgr_stats[mgr]["wk_low"]  += 1
+
+                    by_mid: dict = {}
+                    for m in matchups:
+                        if m.get("matchup_id"):
+                            by_mid.setdefault(m["matchup_id"], []).append(m)
+
+                    for pair in by_mid.values():
+                        if len(pair) != 2:
+                            continue
+                        a, b   = pair
+                        ma     = rid_to_mgr.get(a["roster_id"])
+                        mb     = rid_to_mgr.get(b["roster_id"])
+                        pa_pts = a.get("points") or 0
+                        pb_pts = b.get("points") or 0
+                        if not (ma and mb):
+                            continue
+                        key = tuple(sorted([ma, mb]))
+                        if key not in h2h:
+                            h2h[key] = {"wins": {ma: 0, mb: 0}, "games": []}
+                        h2h[key]["wins"].setdefault(ma, 0)
+                        h2h[key]["wins"].setdefault(mb, 0)
+                        winner = ma if pa_pts > pb_pts else mb
+                        h2h[key]["wins"][winner] += 1
+                        h2h[key]["games"].append({
+                            "season": season, "week": w,
+                            "ma": ma, "pa": pa_pts,
+                            "mb": mb, "pb": pb_pts,
+                            "margin": abs(pa_pts - pb_pts),
+                        })
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    return mgr_stats, h2h
+
+# ─── Page: All-Time Stats ─────────────────────────────────────────────────────
+
+def page_stats(seasons):
+    st.title("📈 All-Time Stats")
+
+    with st.spinner("Crunching league history…"):
+        mgr_stats, _ = build_all_time_data(
+            tuple(lg["league_id"] for lg in seasons)
+        )
+
+    if not mgr_stats:
+        st.info("No completed seasons found.")
         return
 
-    # Normalise column names
-    df.columns = [c.strip() for c in df.columns]
+    rows = []
+    for mgr, s in mgr_stats.items():
+        total = s["w"] + s["l"]
+        rows.append({
+            "Manager":   mgr,
+            "Seasons":   s["seasons"],
+            "W":         s["w"],
+            "L":         s["l"],
+            "Win %":     round(s["w"] / total * 100, 1) if total else 0.0,
+            "PF":        round(s["pf"], 1),
+            "PA":        round(s["pa"], 1),
+            "PF Diff":   round(s["pf"] - s["pa"], 1),
+            "AVG PPG":   round(s["pf"] / max(total, 1), 1),
+            "🏆 Champs": s["champs"],
+            "#1 Seed":   s["first_seed"],
+            "Last Place":s["last_place"],
+            "Wk High":   s["wk_high"],
+            "Wk Low":    s["wk_low"],
+        })
 
-    tab_season, tab_alltime, tab_playoffs = st.tabs(
-        ["📅 Current Season", "📊 All-Time", "🏆 Playoffs"]
+    df = pd.DataFrame(rows).sort_values(["W", "PF"], ascending=False).reset_index(drop=True)
+    df.index = range(1, len(df) + 1)
+
+    # Hero metric cards
+    top_champ = df.loc[df["🏆 Champs"].idxmax()]
+    top_wins  = df.iloc[0]
+    top_ppg   = df.loc[df["AVG PPG"].idxmax()]
+    c1, c2, c3 = st.columns(3)
+    for col, lbl, name, sub in [
+        (c1, "Most Championships", top_champ["Manager"], f"{top_champ['🏆 Champs']} title(s)"),
+        (c2, "Most All-Time Wins",  top_wins["Manager"],  f"{top_wins['W']} wins · {top_wins['Win %']}%"),
+        (c3, "Best Avg PPG",        top_ppg["Manager"],   f"{top_ppg['AVG PPG']} pts/game"),
+    ]:
+        col.markdown(
+            f'<div class="metric-card"><div class="label">{lbl}</div>'
+            f'<div class="value" style="font-size:1.1rem">{name}</div>'
+            f'<div class="sub">{sub}</div></div>',
+            unsafe_allow_html=True
+        )
+
+    st.markdown("")
+    st.dataframe(df, use_container_width=True)
+
+    col1, col2 = st.columns(2)
+    _layout = dict(margin=dict(l=0,r=0,t=40,b=0),
+                   paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                   font_color="#cdd6f4")
+
+    with col1:
+        fig = px.bar(
+            df.reset_index(), x="Manager", y="Win %", title="All-Time Win %",
+            color="Win %", color_continuous_scale="Blues", text="Win %",
+        )
+        fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+        fig.update_layout(height=320, coloraxis_showscale=False, **_layout)
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        fig2 = px.bar(
+            df.reset_index()[["Manager","🏆 Champs","#1 Seed","Last Place"]].melt(
+                id_vars="Manager", var_name="Honor", value_name="Count"
+            ),
+            x="Manager", y="Count", color="Honor", barmode="group",
+            title="Achievements",
+            color_discrete_map={"🏆 Champs":"#f9e2af","#1 Seed":"#89b4fa","Last Place":"#f38ba8"},
+        )
+        fig2.update_layout(height=320, legend_title_text="", **_layout)
+        st.plotly_chart(fig2, use_container_width=True)
+
+    fig3 = px.bar(
+        df.reset_index()[["Manager","PF","PA"]].melt(
+            id_vars="Manager", var_name="Type", value_name="Points"
+        ),
+        x="Manager", y="Points", color="Type", barmode="group",
+        title="All-Time Points For vs Against",
+        color_discrete_map={"PF":"#89b4fa","PA":"#f38ba8"},
     )
+    fig3.update_layout(height=300, legend_title_text="", **_layout)
+    st.plotly_chart(fig3, use_container_width=True)
 
-    # ── Current Season ────────────────────────────────────────────────────────
-    with tab_season:
-        season_cols = ["Name", "Wins", "Losses", "Win %", "Streak",
-                       "Points For", "Points Ag", "Point Dif", "AVG PPG", "AVG AG"]
-        avail = [c for c in season_cols if c in df.columns]
-        sdf   = df[avail].copy()
+# ─── Page: Rivalries ─────────────────────────────────────────────────────────
 
-        if "Wins" in sdf.columns:
-            sdf = sdf.sort_values("Wins", ascending=False).reset_index(drop=True)
-            sdf.index = range(1, len(sdf) + 1)
+def page_rivalries(seasons):
+    st.title("⚔️ Rivalries")
 
-        st.dataframe(sdf, use_container_width=True)
+    with st.spinner("Loading head-to-head records…"):
+        _, h2h = build_all_time_data(
+            tuple(lg["league_id"] for lg in seasons)
+        )
 
-        # Bar chart — points for
-        if "Points For" in df.columns and "Name" in df.columns:
-            chart_df = df[["Name", "Points For", "Points Ag"]].copy()
-            chart_df = chart_df.sort_values("Points For", ascending=False)
-            fig = px.bar(
-                chart_df.melt(id_vars="Name", var_name="Type", value_name="Points"),
-                x="Name", y="Points", color="Type", barmode="group",
-                title="Points For vs Points Against",
-                color_discrete_map={"Points For": "#89b4fa", "Points Ag": "#f38ba8"},
-            )
-            fig.update_layout(
-                height=340, margin=dict(l=0, r=0, t=40, b=0),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font_color="#cdd6f4", legend_title_text="",
-            )
-            st.plotly_chart(fig, use_container_width=True)
+    if not h2h:
+        st.info("No matchup history found.")
+        return
 
-    # ── All-Time ──────────────────────────────────────────────────────────────
-    with tab_alltime:
-        at_cols = ["Name", "TotalW", "TotalL", "TotalW%",
-                   "Total PF", "Total PA", "Total Dif", "WkWon", "WkLost"]
-        avail = [c for c in at_cols if c in df.columns]
-        atdf  = df[avail].copy()
+    managers = sorted({m for key in h2h for m in key})
 
-        rename = {
-            "TotalW": "W", "TotalL": "L", "TotalW%": "Win %",
-            "Total PF": "PF", "Total PA": "PA", "Total Dif": "PF Diff",
-            "WkWon": "Wk Won", "WkLost": "Wk Lost",
-        }
-        atdf = atdf.rename(columns={k: v for k, v in rename.items() if k in atdf.columns})
+    # ── H2H Matrix ────────────────────────────────────────────────────────────
+    st.markdown('<div class="sec-hdr">Head-to-Head Matrix (Regular Season)</div>',
+                unsafe_allow_html=True)
+    matrix_rows = []
+    for mgr_r in managers:
+        row = {"": mgr_r}
+        for mgr_c in managers:
+            if mgr_r == mgr_c:
+                row[mgr_c] = "—"
+            else:
+                key = tuple(sorted([mgr_r, mgr_c]))
+                w = h2h[key]["wins"].get(mgr_r, 0) if key in h2h else 0
+                l = h2h[key]["wins"].get(mgr_c, 0) if key in h2h else 0
+                row[mgr_c] = f"{w}–{l}"
+        matrix_rows.append(row)
 
-        if "W" in atdf.columns:
-            atdf = atdf.sort_values("W", ascending=False).reset_index(drop=True)
-            atdf.index = range(1, len(atdf) + 1)
+    st.dataframe(
+        pd.DataFrame(matrix_rows).set_index(""),
+        use_container_width=True,
+    )
+    st.caption("Read each row as that manager's record **against** each column opponent.")
 
-        st.dataframe(atdf, use_container_width=True)
+    # ── Top Rivalries ─────────────────────────────────────────────────────────
+    st.markdown('<div class="sec-hdr">⚔️ Top Rivalries</div>', unsafe_allow_html=True)
 
-        if "Win %" in atdf.columns and "Name" in atdf.columns:
-            fig2 = px.bar(
-                atdf.reset_index().rename(columns={"index": "Rank"}),
-                x="Name", y="Win %", title="All-Time Win %",
-                color="Win %", color_continuous_scale="Blues", text="Win %",
-            )
-            fig2.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-            fig2.update_layout(
-                height=340, margin=dict(l=0, r=0, t=40, b=0),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font_color="#cdd6f4", showlegend=False, coloraxis_showscale=False,
-            )
-            st.plotly_chart(fig2, use_container_width=True)
+    riv_rows = []
+    for (m1, m2), data in h2h.items():
+        games   = data["games"]
+        w1      = data["wins"].get(m1, 0)
+        w2      = data["wins"].get(m2, 0)
+        margins = [g["margin"] for g in games]
+        riv_rows.append(dict(
+            m1=m1, m2=m2, w1=w1, w2=w2,
+            total=w1+w2,
+            avg_margin=round(sum(margins)/len(margins), 1) if margins else 0,
+        ))
+    riv_rows.sort(key=lambda x: x["total"], reverse=True)
 
-    # ── Playoffs ──────────────────────────────────────────────────────────────
-    with tab_playoffs:
-        po_cols = ["Name", "ChampsMade", "CHAMPSWON", "#1 Seed", "Last Place",
-                   "Playoff W", "Playoff L", "Playoff W%", "Playoff PF", "Playoff PA"]
-        avail = [c for c in po_cols if c in df.columns]
-        podf  = df[avail].copy()
+    for riv in riv_rows[:5]:
+        tied   = riv["w1"] == riv["w2"]
+        leader = riv["m1"] if riv["w1"] > riv["w2"] else riv["m2"]
+        lw, tw = max(riv["w1"], riv["w2"]), min(riv["w1"], riv["w2"])
+        verdict = f"Dead even — {riv['w1']}–{riv['w2']}" if tied else f"{leader} leads {lw}–{tw}"
+        intensity = ("🔥 Intense" if riv["avg_margin"] < 15
+                     else "⚖️ Competitive" if riv["avg_margin"] < 30 else "💪 One-sided")
+        st.markdown(
+            f'<div style="background:#1e1e2e;border:1px solid #313244;border-radius:12px;'
+            f'padding:16px 20px;margin-bottom:10px">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center">'
+            f'<span style="font-size:1.1rem;font-weight:700;color:#cdd6f4">'
+            f'{riv["m1"]} <span style="color:#6c7086">vs</span> {riv["m2"]}</span>'
+            f'<span style="color:#f9e2af;font-size:.85rem">{intensity}</span></div>'
+            f'<div style="color:#89b4fa;font-weight:700;font-size:1.4rem;margin-top:6px">'
+            f'{riv["w1"]}–{riv["w2"]}</div>'
+            f'<div style="color:#a6adc8;font-size:.8rem;margin-top:4px">'
+            f'{verdict} · {riv["total"]} games played · avg margin {riv["avg_margin"]} pts</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
 
-        rename_po = {
-            "ChampsMade": "Finals", "CHAMPSWON": "🏆 Champs",
-            "#1 Seed": "1st Seeds", "Last Place": "Last Place",
-            "Playoff W": "PO W", "Playoff L": "PO L",
-            "Playoff W%": "PO Win%", "Playoff PF": "PO PF", "Playoff PA": "PO PA",
-        }
-        podf = podf.rename(columns={k: v for k, v in rename_po.items() if k in podf.columns})
+    # ── All-time records ──────────────────────────────────────────────────────
+    all_games = [g for data in h2h.values() for g in data["games"]]
+    if not all_games:
+        return
 
-        if "🏆 Champs" in podf.columns:
-            podf = podf.sort_values("🏆 Champs", ascending=False).reset_index(drop=True)
-            podf.index = range(1, len(podf) + 1)
+    st.markdown('<div class="sec-hdr">📋 All-Time Records</div>', unsafe_allow_html=True)
 
-        st.dataframe(podf, use_container_width=True)
+    blowout  = max(all_games, key=lambda g: g["margin"])
+    closest  = min(all_games, key=lambda g: g["margin"])
+    hi_score = max(all_games, key=lambda g: max(g["pa"], g["pb"]))
+    hi_comb  = max(all_games, key=lambda g: g["pa"] + g["pb"])
 
-        # Champions bar
-        if "🏆 Champs" in podf.columns and "Finals" in podf.columns:
-            honor_cols = [c for c in ["🏆 Champs", "Finals", "1st Seeds"] if c in podf.columns]
-            fig3 = px.bar(
-                podf.reset_index()[["Name"] + honor_cols].melt(
-                    id_vars="Name", var_name="Honor", value_name="Count"
-                ),
-                x="Name", y="Count", color="Honor", barmode="group",
-                title="Championship Accolades",
-                color_discrete_sequence=["#f9e2af", "#fab387", "#89b4fa"],
-            )
-            fig3.update_layout(
-                height=320, margin=dict(l=0, r=0, t=40, b=0),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font_color="#cdd6f4", legend_title_text="",
-            )
-            st.plotly_chart(fig3, use_container_width=True)
+    def rec_card(title, g, detail):
+        return (
+            f'<div class="metric-card" style="text-align:left">'
+            f'<div class="label">{title}</div>'
+            f'<div class="value" style="font-size:.9rem">'
+            f'{g["ma"]} {g["pa"]:.1f} – {g["pb"]:.1f} {g["mb"]}</div>'
+            f'<div class="sub">{g["season"]} Wk {g["week"]} · {detail}</div></div>'
+        )
+
+    rc1, rc2 = st.columns(2)
+    rc1.markdown(rec_card("Biggest Blowout",     blowout,  f'Margin: {blowout["margin"]:.1f}'),  unsafe_allow_html=True)
+    rc2.markdown(rec_card("Closest Game",        closest,  f'Margin: {closest["margin"]:.2f}'),  unsafe_allow_html=True)
+    rc3, rc4 = st.columns(2)
+    rc3.markdown(rec_card("Highest Single Score",hi_score, f'Score: {max(hi_score["pa"],hi_score["pb"]):.1f}'), unsafe_allow_html=True)
+    rc4.markdown(rec_card("Highest Combined",    hi_comb,  f'Total: {hi_comb["pa"]+hi_comb["pb"]:.1f}'),       unsafe_allow_html=True)
 
 # ─── Page: Wiki ───────────────────────────────────────────────────────────────
 
@@ -1782,7 +1963,7 @@ def main():
     tabs = st.tabs([
         "🏠 Home", "📊 Standings", "🏟️ Teams", "📅 Matchups",
         "🏆 Playoffs", "💱 Transactions", "📜 Drafts",
-        "💰 Values", "🎮 Grid", "🛠️ Tools", "📈 Stats", "📖 Wiki",
+        "💰 Values", "🎮 Grid", "🛠️ Tools", "📈 Stats", "⚔️ Rivalries", "📖 Wiki",
     ])
     with tabs[0]:  page_home(seasons, players)
     with tabs[1]:  page_standings(seasons, players)
@@ -1794,8 +1975,9 @@ def main():
     with tabs[7]:  page_trade_analyzer(seasons, players)
     with tabs[8]:  page_immaculate_grid(seasons, players)
     with tabs[9]:  page_tools(seasons, players)
-    with tabs[10]: page_league_stats()
-    with tabs[11]: page_wiki()
+    with tabs[10]: page_stats(seasons)
+    with tabs[11]: page_rivalries(seasons)
+    with tabs[12]: page_wiki()
 
 if __name__ == "__main__":
     main()
