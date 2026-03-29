@@ -360,8 +360,8 @@ def generate_valid_grid(teams_dict, history, players, seed):
     tids = list(teams_dict.keys())
 
     for _ in range(600):
-        # 85 % pure team-vs-team grid; 15 % one column swapped for a spice category
-        use_spice = rng.random() < 0.15 and len(tids) >= 5
+        # 50 % pure team-vs-team grid; 50 % one column swapped for a spice category
+        use_spice = rng.random() < 0.50 and len(tids) >= 5
 
         if use_spice:
             shuffled  = rng.sample(tids, 5)
