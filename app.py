@@ -36,6 +36,7 @@ st.markdown("""
 <style>
 /* ── Reduce gap between header and tabs ────────────── */
 .main .block-container{padding-top:1rem!important}
+.stTabs [data-baseweb="tab-panel"]{padding-top:0.5rem!important}
 
 /* ── Base ──────────────────────────────────────────── */
 .metric-card{background:#1e1e2e;border-radius:12px;padding:16px 20px;
