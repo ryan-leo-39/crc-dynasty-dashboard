@@ -1182,6 +1182,137 @@ at any point in league history (any season since 2023).
 - The puzzle is the same for everyone and resets every night at midnight
         """)
 
+# ─── Page: League Stats ───────────────────────────────────────────────────────
+
+GSHEET_CSV = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1u05ZjYbM-Hj46bnAh9R9aF7QHXQtKNR_YADQhhVnI1M/export?format=csv"
+)
+
+@st.cache_data(ttl=3600, show_spinner="Loading league stats…")
+def fetch_gsheet():
+    return pd.read_csv(GSHEET_CSV)
+
+def page_league_stats():
+    st.title("📈 League Stats")
+    st.caption("Data pulled automatically from the CRC Dynasty Google Sheet · refreshes every hour.")
+
+    try:
+        df = fetch_gsheet()
+    except Exception as e:
+        st.error(f"Could not load the Google Sheet: {e}")
+        return
+
+    # Normalise column names
+    df.columns = [c.strip() for c in df.columns]
+
+    tab_season, tab_alltime, tab_playoffs = st.tabs(
+        ["📅 Current Season", "📊 All-Time", "🏆 Playoffs"]
+    )
+
+    # ── Current Season ────────────────────────────────────────────────────────
+    with tab_season:
+        season_cols = ["Name", "Wins", "Losses", "Win %", "Streak",
+                       "Points For", "Points Ag", "Point Dif", "AVG PPG", "AVG AG"]
+        avail = [c for c in season_cols if c in df.columns]
+        sdf   = df[avail].copy()
+
+        if "Wins" in sdf.columns:
+            sdf = sdf.sort_values("Wins", ascending=False).reset_index(drop=True)
+            sdf.index = range(1, len(sdf) + 1)
+
+        st.dataframe(sdf, use_container_width=True)
+
+        # Bar chart — points for
+        if "Points For" in df.columns and "Name" in df.columns:
+            chart_df = df[["Name", "Points For", "Points Ag"]].copy()
+            chart_df = chart_df.sort_values("Points For", ascending=False)
+            fig = px.bar(
+                chart_df.melt(id_vars="Name", var_name="Type", value_name="Points"),
+                x="Name", y="Points", color="Type", barmode="group",
+                title="Points For vs Points Against",
+                color_discrete_map={"Points For": "#89b4fa", "Points Ag": "#f38ba8"},
+            )
+            fig.update_layout(
+                height=340, margin=dict(l=0, r=0, t=40, b=0),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font_color="#cdd6f4", legend_title_text="",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    # ── All-Time ──────────────────────────────────────────────────────────────
+    with tab_alltime:
+        at_cols = ["Name", "TotalW", "TotalL", "TotalW%",
+                   "Total PF", "Total PA", "Total Dif", "WkWon", "WkLost"]
+        avail = [c for c in at_cols if c in df.columns]
+        atdf  = df[avail].copy()
+
+        rename = {
+            "TotalW": "W", "TotalL": "L", "TotalW%": "Win %",
+            "Total PF": "PF", "Total PA": "PA", "Total Dif": "PF Diff",
+            "WkWon": "Wk Won", "WkLost": "Wk Lost",
+        }
+        atdf = atdf.rename(columns={k: v for k, v in rename.items() if k in atdf.columns})
+
+        if "W" in atdf.columns:
+            atdf = atdf.sort_values("W", ascending=False).reset_index(drop=True)
+            atdf.index = range(1, len(atdf) + 1)
+
+        st.dataframe(atdf, use_container_width=True)
+
+        if "Win %" in atdf.columns and "Name" in atdf.columns:
+            fig2 = px.bar(
+                atdf.reset_index().rename(columns={"index": "Rank"}),
+                x="Name", y="Win %", title="All-Time Win %",
+                color="Win %", color_continuous_scale="Blues", text="Win %",
+            )
+            fig2.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+            fig2.update_layout(
+                height=340, margin=dict(l=0, r=0, t=40, b=0),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font_color="#cdd6f4", showlegend=False, coloraxis_showscale=False,
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
+    # ── Playoffs ──────────────────────────────────────────────────────────────
+    with tab_playoffs:
+        po_cols = ["Name", "ChampsMade", "CHAMPSWON", "#1 Seed", "Last Place",
+                   "Playoff W", "Playoff L", "Playoff W%", "Playoff PF", "Playoff PA"]
+        avail = [c for c in po_cols if c in df.columns]
+        podf  = df[avail].copy()
+
+        rename_po = {
+            "ChampsMade": "Finals", "CHAMPSWON": "🏆 Champs",
+            "#1 Seed": "1st Seeds", "Last Place": "Last Place",
+            "Playoff W": "PO W", "Playoff L": "PO L",
+            "Playoff W%": "PO Win%", "Playoff PF": "PO PF", "Playoff PA": "PO PA",
+        }
+        podf = podf.rename(columns={k: v for k, v in rename_po.items() if k in podf.columns})
+
+        if "🏆 Champs" in podf.columns:
+            podf = podf.sort_values("🏆 Champs", ascending=False).reset_index(drop=True)
+            podf.index = range(1, len(podf) + 1)
+
+        st.dataframe(podf, use_container_width=True)
+
+        # Champions bar
+        if "🏆 Champs" in podf.columns and "Finals" in podf.columns:
+            honor_cols = [c for c in ["🏆 Champs", "Finals", "1st Seeds"] if c in podf.columns]
+            fig3 = px.bar(
+                podf.reset_index()[["Name"] + honor_cols].melt(
+                    id_vars="Name", var_name="Honor", value_name="Count"
+                ),
+                x="Name", y="Count", color="Honor", barmode="group",
+                title="Championship Accolades",
+                color_discrete_sequence=["#f9e2af", "#fab387", "#89b4fa"],
+            )
+            fig3.update_layout(
+                height=320, margin=dict(l=0, r=0, t=40, b=0),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font_color="#cdd6f4", legend_title_text="",
+            )
+            st.plotly_chart(fig3, use_container_width=True)
+
 # ─── Page: Wiki ───────────────────────────────────────────────────────────────
 
 def page_wiki():
@@ -1651,7 +1782,7 @@ def main():
     tabs = st.tabs([
         "🏠 Home", "📊 Standings", "🏟️ Teams", "📅 Matchups",
         "🏆 Playoffs", "💱 Transactions", "📜 Drafts",
-        "💰 Values", "🎮 Grid", "🛠️ Tools", "📖 Wiki",
+        "💰 Values", "🎮 Grid", "🛠️ Tools", "📈 Stats", "📖 Wiki",
     ])
     with tabs[0]:  page_home(seasons, players)
     with tabs[1]:  page_standings(seasons, players)
@@ -1663,7 +1794,8 @@ def main():
     with tabs[7]:  page_trade_analyzer(seasons, players)
     with tabs[8]:  page_immaculate_grid(seasons, players)
     with tabs[9]:  page_tools(seasons, players)
-    with tabs[10]: page_wiki()
+    with tabs[10]: page_league_stats()
+    with tabs[11]: page_wiki()
 
 if __name__ == "__main__":
     main()
