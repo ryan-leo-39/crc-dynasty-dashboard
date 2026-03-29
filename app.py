@@ -35,8 +35,8 @@ st.set_page_config(
 st.markdown("""
 <style>
 /* ── Reduce gap between header and tabs ────────────── */
-.main .block-container{padding-top:0.25rem!important}
-.stTabs{margin-top:-0.5rem!important}
+.main .block-container{padding-top:0!important}
+.stTabs{margin-top:-2rem!important}
 .stTabs [data-baseweb="tab-panel"]{padding-top:0.5rem!important}
 
 /* ── Base ──────────────────────────────────────────── */
