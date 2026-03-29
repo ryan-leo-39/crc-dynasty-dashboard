@@ -10,8 +10,15 @@ import requests
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime, date
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+_TZ = ZoneInfo("America/New_York")
+
+def _today():
+    """Return today's date in US Eastern time (grid resets at midnight ET)."""
+    return datetime.now(_TZ).date()
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 LEAGUE_ID = "1312122172180824064"
@@ -377,7 +384,7 @@ def generate_valid_grid(teams_dict, history, players, seed):
             [_make_team_item(tids[i], teams_dict) for i in range(3, min(6,len(tids)))])
 
 def daily_seed():
-    return int(hashlib.md5(date.today().isoformat().encode()).hexdigest(), 16) % (2**31)
+    return int(hashlib.md5(_today().isoformat().encode()).hexdigest(), 16) % (2**31)
 
 # ─── Page: Home ───────────────────────────────────────────────────────────────
 
@@ -1197,10 +1204,10 @@ def _build_grid_html(row_items, col_items, current_answers, results, submitted):
 
 def page_immaculate_grid(seasons, players):
     st.title("🎮 Immaculate Grid")
-    today = date.today()
+    today = _today()
     st.caption(
         f"{today.strftime('%B %d, %Y')}  ·  Name a player rostered on "
-        f"**both** teams (row × column) at any point in league history  ·  Resets at midnight"
+        f"**both** teams (row × column) at any point in league history  ·  Resets at midnight ET"
     )
 
     current_lid = seasons[0]["league_id"]
@@ -1965,6 +1972,7 @@ A: Contact Ryan — or submit a voting proposal in the League Voting tool. 😄
 # ─── Voting helpers ───────────────────────────────────────────────────────────
 
 VOTES_FILE = Path(__file__).parent / "votes.json"
+PROPS_FILE = Path(__file__).parent / "props.json"
 
 def _load_votes():
     if VOTES_FILE.exists():
@@ -1976,6 +1984,17 @@ def _load_votes():
 
 def _save_votes(data):
     VOTES_FILE.write_text(json.dumps(data, indent=2))
+
+def _load_props():
+    if PROPS_FILE.exists():
+        try:
+            return json.loads(PROPS_FILE.read_text())
+        except Exception:
+            pass
+    return {"props": []}
+
+def _save_props(data):
+    PROPS_FILE.write_text(json.dumps(data, indent=2))
 
 # ─── Tool: Draft Lottery ──────────────────────────────────────────────────────
 
@@ -2108,6 +2127,157 @@ def _tool_lottery(seasons):
             st.session_state._lottery_step   = 0
             st.rerun()
 
+# ─── Tool: Season Prop Board ─────────────────────────────────────────────────
+
+def _tool_props(seasons):
+    st.caption("Make predictions for the season. Lock them in before the deadline — commissioner reveals correct answers at season end.")
+
+    mgr_names = sorted({
+        t["display_name"]
+        for s in seasons
+        for t in build_team_map(get_users(s["league_id"]), get_rosters(s["league_id"])).values()
+    })
+    season_opts = [s["season"] for s in seasons]
+
+    data    = _load_props()
+    tab_p, tab_lb, tab_mgmt = st.tabs(["📋 Predictions", "🏆 Leaderboard", "⚙️ Manage"])
+
+    # ── Predictions tab ───────────────────────────────────────────────────────
+    with tab_p:
+        sel_season = st.selectbox("Season", season_opts, key="props_season_p")
+        season_props = [p for p in data["props"] if p["season"] == sel_season]
+
+        if not season_props:
+            st.info("No props created for this season yet. Ask the commissioner to add some.")
+        else:
+            voter = st.selectbox("Predicting as:", ["— select your name —"] + mgr_names, key="props_voter")
+
+            for prop in season_props:
+                status     = prop["status"]
+                my_pick    = prop["picks"].get(voter) if voter != "— select your name —" else None
+                badge_col  = {"open": "#a6e3a1", "locked": "#f9e2af", "resolved": "#89b4fa"}.get(status, "#6c7086")
+                badge_text = {"open": "🟢 Open", "locked": "🔒 Locked", "resolved": "✅ Resolved"}.get(status, status)
+
+                st.markdown(
+                    f'<div style="background:#1e1e2e;border:1px solid #313244;border-radius:10px;'
+                    f'padding:14px 16px;margin:8px 0">'
+                    f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+                    f'<span style="font-weight:700;color:#cdd6f4;font-size:1rem">{prop["question"]}</span>'
+                    f'<span style="font-size:.75rem;color:{badge_col};font-weight:600">{badge_text}</span>'
+                    f'</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+                if status == "open" and voter != "— select your name —":
+                    default_idx = prop["options"].index(my_pick) + 1 if my_pick in prop["options"] else 0
+                    pick = st.selectbox(
+                        "Your pick",
+                        ["— choose —"] + prop["options"],
+                        index=default_idx,
+                        key=f"prop_pick_{prop['id']}",
+                    )
+                    if pick != "— choose —" and st.button("Save pick", key=f"prop_save_{prop['id']}"):
+                        prop["picks"][voter] = pick
+                        _save_props(data)
+                        st.success(f"Locked in: **{pick}**")
+                        st.rerun()
+
+                elif status == "locked":
+                    if my_pick:
+                        st.markdown(f"Your pick: **{my_pick}** 🔒")
+                    else:
+                        st.caption("You didn't submit a pick before this was locked.")
+
+                elif status == "resolved":
+                    correct = prop.get("correct")
+                    st.markdown(f"✅ Correct answer: **{correct}**")
+                    pick_counts = {}
+                    for m, pk in prop["picks"].items():
+                        pick_counts[pk] = pick_counts.get(pk, 0) + 1
+                    for opt in prop["options"]:
+                        cnt   = pick_counts.get(opt, 0)
+                        right = " ✅" if opt == correct else ""
+                        st.markdown(f"  • {opt}{right} — {cnt} pick(s)")
+                    if my_pick:
+                        result = "✅ You got it right!" if my_pick == correct else f"❌ You picked {my_pick}"
+                        st.markdown(result)
+
+                st.markdown("")
+
+    # ── Leaderboard tab ───────────────────────────────────────────────────────
+    with tab_lb:
+        sel_season_lb = st.selectbox("Season", season_opts, key="props_season_lb")
+        resolved = [p for p in data["props"] if p["season"] == sel_season_lb and p["status"] == "resolved"]
+
+        if not resolved:
+            st.info("No resolved props for this season yet.")
+        else:
+            scores: dict = {}
+            for prop in resolved:
+                for mgr, pick in prop["picks"].items():
+                    scores.setdefault(mgr, 0)
+                    if pick == prop.get("correct"):
+                        scores[mgr] += 1
+
+            rows = sorted(
+                [{"Manager": mgr, "Correct": c,
+                  "Props Entered": sum(1 for p in resolved if mgr in p["picks"]),
+                  "Accuracy": f"{100*c//max(sum(1 for p in resolved if mgr in p['picks']),1)}%"}
+                 for mgr, c in scores.items()],
+                key=lambda x: -x["Correct"],
+            )
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    # ── Manage tab ────────────────────────────────────────────────────────────
+    with tab_mgmt:
+        st.markdown("#### Create New Prop")
+        with st.form("new_prop_form"):
+            p_season  = st.selectbox("Season", season_opts, key="props_season_mgmt")
+            p_question = st.text_input("Question", placeholder="Who wins the 2025 championship?")
+            p_opts_raw = st.text_area("Options (one per line)", placeholder="Manager A\nManager B\nManager C")
+            if st.form_submit_button("➕ Add Prop"):
+                opts_list = [o.strip() for o in p_opts_raw.strip().splitlines() if o.strip()]
+                if p_question.strip() and len(opts_list) >= 2:
+                    data["props"].append({
+                        "id":       str(uuid.uuid4())[:8],
+                        "season":   p_season,
+                        "question": p_question.strip(),
+                        "options":  opts_list,
+                        "status":   "open",
+                        "correct":  None,
+                        "picks":    {},
+                    })
+                    _save_props(data)
+                    st.success("Prop added!")
+                    st.rerun()
+                else:
+                    st.error("Need a question and at least 2 options.")
+
+        st.markdown("#### Existing Props")
+        sel_season_mgmt = st.selectbox("Season", season_opts, key="props_season_mgmt2")
+        for prop in [p for p in data["props"] if p["season"] == sel_season_mgmt]:
+            status = prop["status"]
+            with st.expander(f"{prop['question']} — {status.upper()}"):
+                st.caption(f"Options: {', '.join(prop['options'])}")
+                st.caption(f"Picks so far: {len(prop['picks'])}")
+
+                col1, col2, col3 = st.columns(3)
+                if status == "open" and col1.button("🔒 Lock", key=f"lock_{prop['id']}"):
+                    prop["status"] = "locked"
+                    _save_props(data)
+                    st.rerun()
+                if status == "locked":
+                    correct_pick = col2.selectbox("Correct answer", prop["options"], key=f"correct_{prop['id']}")
+                    if col3.button("✅ Resolve", key=f"resolve_{prop['id']}"):
+                        prop["status"]  = "resolved"
+                        prop["correct"] = correct_pick
+                        _save_props(data)
+                        st.rerun()
+                if col1.button("🗑️ Delete", key=f"del_{prop['id']}"):
+                    data["props"] = [p for p in data["props"] if p["id"] != prop["id"]]
+                    _save_props(data)
+                    st.rerun()
+
 # ─── Tool: League Voting ──────────────────────────────────────────────────────
 
 def _tool_voting(seasons):
@@ -2193,7 +2363,7 @@ def _tool_voting(seasons):
                     "id":           uuid.uuid4().hex[:8],
                     "title":        title.strip(),
                     "description":  desc.strip(),
-                    "created_date": date.today().isoformat(),
+                    "created_date": _today().isoformat(),
                     "season":       seasons[0]["season"],
                     "impl_season":  impl_season.strip(),
                     "status":       "open",
@@ -2249,13 +2419,16 @@ def page_tools(seasons, players):
         )
 
     st.markdown("")
-    tool_tab1, tool_tab2 = st.tabs(["🎰 Draft Lottery", "🗳️ League Voting"])
+    tool_tab1, tool_tab2, tool_tab3 = st.tabs(["🎰 Draft Lottery", "🗳️ League Voting", "🎯 Season Props"])
 
     with tool_tab1:
         _tool_lottery(seasons)
 
     with tool_tab2:
         _tool_voting(seasons)
+
+    with tool_tab3:
+        _tool_props(seasons)
 
 # ─── Combined page wrappers ───────────────────────────────────────────────────
 
