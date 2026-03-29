@@ -146,17 +146,26 @@ def get_season_scores(league_id, last_week):
 
 @st.cache_data(ttl=600)
 def build_player_team_history(league_ids_tuple):
-    """str(pid) → frozenset of roster_ids the player has appeared on across all seasons."""
+    """str(pid) → frozenset of manager display_names the player has appeared on.
+
+    Using display_name (not roster_id) ensures cross-season stability — dynasty
+    leagues create a new Sleeper league each year and roster IDs reset, but the
+    manager's display_name stays constant.
+    """
     history: dict = {}
     for lid in league_ids_tuple:
         try:
+            tm = build_team_map(get_users(lid), get_rosters(lid))
             for r in get_rosters(lid):
-                rid = r["roster_id"]
+                rid  = r["roster_id"]
+                mgr  = tm.get(rid, {}).get("display_name", "")
+                if not mgr:
+                    continue
                 for pid in (r.get("players") or []):
                     spid = str(pid)
                     if spid not in history:
                         history[spid] = set()
-                    history[spid].add(rid)
+                    history[spid].add(mgr)
         except Exception:
             pass
     return {k: frozenset(v) for k, v in history.items()}
@@ -320,7 +329,8 @@ def fmt_player(pid, players):
 
 def _make_team_item(rid, teams_dict):
     t = teams_dict[rid]
-    return {"type": "team", "name": t["team_name"], "mgr": t["display_name"], "value": rid}
+    # value = display_name so it matches the history keys (also display_names)
+    return {"type": "team", "name": t["team_name"], "mgr": t["display_name"], "value": t["display_name"]}
 
 def generate_valid_grid(teams_dict, history, players, seed):
     rng  = random.Random(seed)
