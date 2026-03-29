@@ -148,26 +148,41 @@ def get_season_scores(league_id, last_week):
 def build_player_team_history(league_ids_tuple):
     """str(pid) → frozenset of manager display_names the player has appeared on.
 
-    Using display_name (not roster_id) ensures cross-season stability — dynasty
-    leagues create a new Sleeper league each year and roster IDs reset, but the
-    manager's display_name stays constant.
+    Scans both final roster snapshots AND all transaction adds so that players
+    traded or dropped mid-season are still credited to the manager who had them.
+    Uses display_name (not roster_id) for cross-season stability.
     """
     history: dict = {}
+
+    def _add(spid, mgr):
+        if spid not in history:
+            history[spid] = set()
+        history[spid].add(mgr)
+
     for lid in league_ids_tuple:
         try:
-            tm = build_team_map(get_users(lid), get_rosters(lid))
+            lg  = get_league(lid)
+            tm  = build_team_map(get_users(lid), get_rosters(lid))
+
+            # 1. Final roster snapshots (players still on team at season end)
             for r in get_rosters(lid):
-                rid  = r["roster_id"]
-                mgr  = tm.get(rid, {}).get("display_name", "")
+                rid = r["roster_id"]
+                mgr = tm.get(rid, {}).get("display_name", "")
                 if not mgr:
                     continue
                 for pid in (r.get("players") or []):
-                    spid = str(pid)
-                    if spid not in history:
-                        history[spid] = set()
-                    history[spid].add(mgr)
+                    _add(str(pid), mgr)
+
+            # 2. Transaction adds — catches players traded/waivered away mid-season
+            last = max(lg["settings"].get("last_scored_leg", 1), 18)
+            for txn in get_all_transactions(lid, last):
+                for pid, rid in (txn.get("adds") or {}).items():
+                    mgr = tm.get(rid, {}).get("display_name", "")
+                    if mgr:
+                        _add(str(pid), mgr)
         except Exception:
             pass
+
     return {k: frozenset(v) for k, v in history.items()}
 
 @st.cache_data(ttl=300)
