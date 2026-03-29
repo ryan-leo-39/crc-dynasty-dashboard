@@ -37,6 +37,7 @@ st.markdown("""
 /* ── Reduce gap between header and tabs ────────────── */
 .main .block-container{padding-top:0!important}
 .stTabs{margin-top:-4.5rem!important}
+[data-baseweb="tab-panel"] .stTabs{margin-top:0!important}
 .stTabs [data-baseweb="tab-panel"]{padding-top:0.5rem!important}
 
 /* ── Base ──────────────────────────────────────────── */
