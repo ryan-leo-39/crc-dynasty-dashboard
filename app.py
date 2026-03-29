@@ -2579,6 +2579,40 @@ def page_league_office(seasons, players):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
+    # Inject a persistent 🏠 home button into the Streamlit header bar
+    components.html("""<script>
+    (function() {
+      function inject() {
+        var par = window.parent.document;
+        if (par.getElementById('crc-home-btn')) return;
+        var btn = par.createElement('div');
+        btn.id = 'crc-home-btn';
+        btn.innerHTML = '🏠';
+        btn.title = 'Go to Home';
+        btn.style.cssText = [
+          'position:fixed','top:10px','right:72px','z-index:999999',
+          'cursor:pointer','font-size:1.35rem','line-height:1',
+          'background:#1e1e2e','border:1px solid #313244',
+          'border-radius:8px','padding:5px 8px',
+          'transition:border-color .15s','user-select:none'
+        ].join(';');
+        btn.onmouseover = function(){ btn.style.borderColor='#89b4fa'; };
+        btn.onmouseout  = function(){ btn.style.borderColor='#313244'; };
+        btn.onclick = function() {
+          var tabs = par.querySelectorAll('button[role="tab"]');
+          for (var t of tabs) {
+            if (t.innerText.includes('Home')) { t.click(); break; }
+          }
+        };
+        par.body.appendChild(btn);
+      }
+      if (window.parent.document.readyState === 'complete') inject();
+      else window.parent.addEventListener('load', inject);
+      // Also retry after a short delay in case Streamlit re-renders the header
+      setTimeout(inject, 800);
+    })();
+    </script>""", height=0, scrolling=False)
+
     with st.spinner("Loading league…"):
         seasons = get_season_chain(LEAGUE_ID)
         players = get_players()
