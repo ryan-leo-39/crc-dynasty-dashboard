@@ -1105,7 +1105,6 @@ def page_draft_grades(seasons, players):
 # ─── Page: Trade Analyzer ────────────────────────────────────────────────────
 
 def page_trade_analyzer(seasons, players):
-    st.title("💰 Trade Analyzer")
     st.caption("Dynasty value blends actual fantasy production (60%) with age trajectory (40%). Use as a guide, not gospel.")
 
     opts  = {lg["season"]: lg["league_id"] for lg in seasons}
@@ -2550,20 +2549,56 @@ def page_tools(seasons, players):
             unsafe_allow_html=True
         )
 
-    st.markdown("")
-    tool_tab1, tool_tab2, tool_tab3, tool_tab4 = st.tabs(["🎰 Draft Lottery", "🗳️ League Voting", "🎯 Season Props", "🔍 Roster Lookup"])
+    st.markdown('<div class="sec-hdr">🧰 Tools</div>', unsafe_allow_html=True)
 
-    with tool_tab1:
-        _tool_lottery(seasons)
+    TOOLS = [
+        ("🎰", "Draft Lottery",   "draft",  "Weighted random draw for the rookie draft. Bottom 4 teams enter with odds based on finish."),
+        ("🗳️", "League Voting",   "voting", "Propose and vote on rule changes. Passes with a majority vote."),
+        ("🎯", "Season Props",    "props",  "Lock in predictions before the season. Leaderboard reveals who called it at season end."),
+        ("🔍", "Roster Lookup",   "roster", "See every player a manager has ever rostered, or find which managers held a given player."),
+        ("⚖️", "Trade Analyzer",  "trade",  "Compare dynasty value across two rosters. Blends production (60%) and age trajectory (40%)."),
+    ]
 
-    with tool_tab2:
-        _tool_voting(seasons)
+    active = st.session_state.get("active_tool")
 
-    with tool_tab3:
-        _tool_props(seasons)
+    for row_start in range(0, len(TOOLS), 3):
+        row   = TOOLS[row_start:row_start + 3]
+        cols  = st.columns(3)
+        for col, (ico, name, key, desc) in zip(cols, row):
+            with col:
+                is_active  = active == key
+                border_col = "#89b4fa" if is_active else "#313244"
+                st.markdown(
+                    f'<div style="background:#1e1e2e;border:2px solid {border_col};'
+                    f'border-radius:12px;padding:16px 18px;margin-bottom:4px">'
+                    f'<div style="font-size:1.5rem">{ico}</div>'
+                    f'<div style="font-weight:700;color:#cdd6f4;margin:6px 0 4px">{name}</div>'
+                    f'<div style="font-size:.8rem;color:#a6adc8;line-height:1.45">{desc}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                if st.button(
+                    "▲ Close" if is_active else "▶ Open",
+                    key=f"tool_btn_{key}",
+                    use_container_width=True,
+                ):
+                    st.session_state.active_tool = None if is_active else key
+                    st.rerun()
 
-    with tool_tab4:
-        _tool_roster_lookup(seasons, players)
+    if active:
+        st.markdown("---")
+        ico, name = next((i, n) for i, n, k, _ in TOOLS if k == active)
+        st.markdown(f'<div class="sec-hdr">{ico} {name}</div>', unsafe_allow_html=True)
+        if active == "draft":
+            _tool_lottery(seasons)
+        elif active == "voting":
+            _tool_voting(seasons)
+        elif active == "props":
+            _tool_props(seasons)
+        elif active == "roster":
+            _tool_roster_lookup(seasons, players)
+        elif active == "trade":
+            page_trade_analyzer(seasons, players)
 
 # ─── Combined page wrappers ───────────────────────────────────────────────────
 
@@ -2629,18 +2664,16 @@ def main():
 
     tabs = st.tabs([
         "🏠 Home", "📊 Standings", "🏟️ Teams", "📅 Schedule",
-        "📋 Activity", "💰 Trade Analyzer", "🎮 Grid",
-        "📜 History", "🏢 League Office",
+        "📋 Activity", "🎮 Grid", "📜 History", "🏢 League Office",
     ])
     with tabs[0]: page_home(seasons, players)
     with tabs[1]: page_standings(seasons, players)
     with tabs[2]: page_teams(seasons, players)
     with tabs[3]: page_schedule(seasons, players)
     with tabs[4]: page_activity(seasons, players)
-    with tabs[5]: page_trade_analyzer(seasons, players)
-    with tabs[6]: page_immaculate_grid(seasons, players)
-    with tabs[7]: page_history(seasons)
-    with tabs[8]: page_league_office(seasons, players)
+    with tabs[5]: page_immaculate_grid(seasons, players)
+    with tabs[6]: page_history(seasons)
+    with tabs[7]: page_league_office(seasons, players)
 
 if __name__ == "__main__":
     main()
