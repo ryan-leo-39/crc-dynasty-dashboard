@@ -418,43 +418,55 @@ def page_home(seasons, players):
     _grid_date    = _today().strftime("%b %d")
 
     components.html(f"""
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
-      body {{margin:0;background:transparent}}
+      * {{box-sizing:border-box;margin:0;padding:0}}
+      body {{background:transparent;font-family:'Inter',sans-serif}}
       .row {{display:flex;gap:10px;padding:2px 0}}
       .card {{
         flex:1;background:#1e1e2e;border:1px solid #313244;border-radius:10px;
         padding:10px 12px;cursor:pointer;text-align:center;
-        transition:border-color .15s,transform .1s;user-select:none
+        transition:border-color .15s,transform .1s;user-select:none;
+        font-family:'Inter',sans-serif
       }}
       .card:hover {{border-color:#89b4fa;transform:translateY(-2px)}}
       .card:active {{transform:translateY(0)}}
-      .ico  {{font-size:1.3rem;line-height:1.4}}
-      .lbl  {{font-size:.72rem;color:#a6adc8;font-weight:600;margin:2px 0 1px}}
-      .val  {{font-size:.95rem;font-weight:700;color:#cdd6f4}}
+      .ico {{font-size:1.3rem;line-height:1.5}}
+      .lbl {{font-size:.72rem;color:#a6adc8;font-weight:600;margin:2px 0 1px;font-family:'Inter',sans-serif}}
+      .val {{font-size:.95rem;font-weight:700;color:#cdd6f4;font-family:'Inter',sans-serif}}
     </style>
     <div class="row">
-      <div class="card" onclick="go('League Office')">
+      <div class="card" onclick="go('League Office','Tools','Season Props')">
         <div class="ico">🎯</div>
         <div class="lbl">Season Props</div>
         <div class="val">{_open_props} open</div>
       </div>
-      <div class="card" onclick="go('League Office')">
+      <div class="card" onclick="go('League Office','Tools','League Voting')">
         <div class="ico">🗳️</div>
         <div class="lbl">League Voting</div>
         <div class="val">{_active_votes} active</div>
       </div>
-      <div class="card" onclick="go('Grid')">
+      <div class="card" onclick="go('Grid',null,null)">
         <div class="ico">🎮</div>
         <div class="lbl">Daily Grid</div>
         <div class="val">{_grid_date}</div>
       </div>
     </div>
     <script>
-    function go(name) {{
-      var tabs = window.parent.document.querySelectorAll('button[role="tab"]');
-      for (var t of tabs) {{
-        if (t.innerText.includes(name)) {{ t.click(); break; }}
+    function go(top, sub1, sub2) {{
+      function clickTab(text) {{
+        var tabs = window.parent.document.querySelectorAll('button[role="tab"]');
+        for (var t of tabs) {{
+          if (t.innerText.includes(text)) {{ t.click(); return true; }}
+        }}
+        return false;
       }}
+      clickTab(top);
+      if (sub1) setTimeout(function() {{
+        clickTab(sub1);
+        if (sub2) setTimeout(function() {{ clickTab(sub2); }}, 250);
+      }}, 250);
     }}
     </script>
     """, height=90, scrolling=False)
