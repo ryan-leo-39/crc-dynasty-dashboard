@@ -34,10 +34,8 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-/* ── Remove Streamlit header blank space ───────────── */
-header[data-testid="stHeader"] {height:0!important;min-height:0!important;visibility:hidden}
-#MainMenu {visibility:hidden}
-.main .block-container{padding-top:0.75rem!important}
+/* ── Reduce gap between header and tabs ────────────── */
+.main .block-container{padding-top:1rem!important}
 
 /* ── Base ──────────────────────────────────────────── */
 .metric-card{background:#1e1e2e;border-radius:12px;padding:16px 20px;
@@ -442,12 +440,12 @@ def page_home(seasons, players):
       .val {{font-size:.95rem;font-weight:700;color:#cdd6f4;font-family:'Inter',sans-serif}}
     </style>
     <div class="row">
-      <div class="card" onclick="go('League Office','Tools',null)">
+      <div class="card" onclick="go('League Office','Tools','Season Props')">
         <div class="ico">🎯</div>
         <div class="lbl">Season Props</div>
         <div class="val">{_open_props} open</div>
       </div>
-      <div class="card" onclick="go('League Office','Tools',null)">
+      <div class="card" onclick="go('League Office','Tools','League Voting')">
         <div class="ico">🗳️</div>
         <div class="lbl">League Voting</div>
         <div class="val">{_active_votes} active</div>
@@ -456,6 +454,23 @@ def page_home(seasons, players):
         <div class="ico">🎮</div>
         <div class="lbl">Daily Grid</div>
         <div class="val">{_grid_date}</div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div class="card" onclick="go('League Office','Tools','Roster Lookup')">
+        <div class="ico">🔍</div>
+        <div class="lbl">Roster Lookup</div>
+        <div class="val">All seasons</div>
+      </div>
+      <div class="card" onclick="go('League Office','Tools','Trade Analyzer')">
+        <div class="ico">⚖️</div>
+        <div class="lbl">Trade Analyzer</div>
+        <div class="val">Dynasty value</div>
+      </div>
+      <div class="card" onclick="go('League Office','Wiki',null)">
+        <div class="ico">📖</div>
+        <div class="lbl">Wiki</div>
+        <div class="val">Rules & info</div>
       </div>
     </div>
     <script>
@@ -474,7 +489,7 @@ def page_home(seasons, players):
       }}, 250);
     }}
     </script>
-    """, height=90, scrolling=False)
+    """, height=185, scrolling=False)
 
     r1c1, r1c2 = st.columns(2)
     r2c1, r2c2 = st.columns(2)
@@ -2538,57 +2553,18 @@ def _tool_voting(seasons):
 # ─── Page: Tools & Links ──────────────────────────────────────────────────────
 
 def page_tools(seasons, players):
-    st.title("🛠️ Tools")
-
-    st.markdown('<div class="sec-hdr">🧰 Tools</div>', unsafe_allow_html=True)
-
-    TOOLS = [
-        ("🎰", "Draft Lottery",   "draft",  "Weighted random draw for the rookie draft. Bottom 4 teams enter with odds based on finish."),
-        ("🗳️", "League Voting",   "voting", "Propose and vote on rule changes. Passes with a majority vote."),
-        ("🎯", "Season Props",    "props",  "Lock in predictions before the season. Leaderboard reveals who called it at season end."),
-        ("🔍", "Roster Lookup",   "roster", "See every player a manager has ever rostered, or find which managers held a given player."),
-        ("⚖️", "Trade Analyzer",  "trade",  "Compare dynasty value across two rosters. Blends production (60%) and age trajectory (40%)."),
-    ]
-
-    active = st.session_state.get("active_tool")
-
-    for row_start in range(0, len(TOOLS), 3):
-        row   = TOOLS[row_start:row_start + 3]
-        cols  = st.columns(3)
-        for col, (ico, name, key, desc) in zip(cols, row):
-            with col:
-                is_active  = active == key
-                border_col = "#89b4fa" if is_active else "#313244"
-                st.markdown(
-                    f'<div style="background:#1e1e2e;border:2px solid {border_col};'
-                    f'border-radius:12px;padding:16px 18px;margin-bottom:4px">'
-                    f'<div style="font-size:1.5rem">{ico}</div>'
-                    f'<div style="font-weight:700;color:#cdd6f4;margin:6px 0 4px">{name}</div>'
-                    f'<div style="font-size:.8rem;color:#a6adc8;line-height:1.45">{desc}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-                if st.button(
-                    "▲ Close" if is_active else "▶ Open",
-                    key=f"tool_btn_{key}",
-                    use_container_width=True,
-                ):
-                    st.session_state.active_tool = None if is_active else key
-
-    if active:
-        st.markdown("---")
-        ico, name = next((i, n) for i, n, k, _ in TOOLS if k == active)
-        st.markdown(f'<div class="sec-hdr">{ico} {name}</div>', unsafe_allow_html=True)
-        if active == "draft":
-            _tool_lottery(seasons)
-        elif active == "voting":
-            _tool_voting(seasons)
-        elif active == "props":
-            _tool_props(seasons)
-        elif active == "roster":
-            _tool_roster_lookup(seasons, players)
-        elif active == "trade":
-            page_trade_analyzer(seasons, players)
+    t1, t2, t3, t4, t5 = st.tabs([
+        "🎰 Draft Lottery",
+        "🗳️ League Voting",
+        "🎯 Season Props",
+        "🔍 Roster Lookup",
+        "⚖️ Trade Analyzer",
+    ])
+    with t1: _tool_lottery(seasons)
+    with t2: _tool_voting(seasons)
+    with t3: _tool_props(seasons)
+    with t4: _tool_roster_lookup(seasons, players)
+    with t5: page_trade_analyzer(seasons, players)
 
 # ─── Combined page wrappers ───────────────────────────────────────────────────
 
