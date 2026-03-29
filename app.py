@@ -2590,14 +2590,14 @@ def main():
         btn.innerHTML = '🏠';
         btn.title = 'Go to Home';
         btn.style.cssText = [
-          'position:fixed','top:10px','left:12px','z-index:999999',
-          'cursor:pointer','font-size:1.35rem','line-height:1',
-          'background:#1e1e2e','border:1px solid #313244',
-          'border-radius:8px','padding:5px 8px',
-          'transition:border-color .15s','user-select:none'
+          'position:fixed','top:16px','left:14px','z-index:999999',
+          'cursor:pointer','font-size:1.2rem','line-height:1',
+          'background:none','border:none','padding:2px 4px',
+          'filter:grayscale(1) brightness(1.8)',
+          'opacity:0.75','transition:opacity .15s','user-select:none'
         ].join(';');
-        btn.onmouseover = function(){ btn.style.borderColor='#89b4fa'; };
-        btn.onmouseout  = function(){ btn.style.borderColor='#313244'; };
+        btn.onmouseover = function(){ btn.style.opacity='1'; };
+        btn.onmouseout  = function(){ btn.style.opacity='0.75'; };
         btn.onclick = function() {
           var tabs = par.querySelectorAll('button[role="tab"]');
           for (var t of tabs) {
